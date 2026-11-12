@@ -11,7 +11,22 @@ import {
   WarehouseRequestResponse,
 } from './types';
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) || '';
+function resolveApiBase(): string {
+  const raw = ((import.meta.env.VITE_API_URL as string | undefined) || '').trim();
+  if (!raw) return '';
+  if (typeof window !== 'undefined') {
+    const cleanHost = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (cleanHost === window.location.host) {
+      return '';
+    }
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    return raw.replace(/\/+$/, '');
+  }
+  return `https://${raw.replace(/\/+$/, '')}`;
+}
+
+const API_BASE = resolveApiBase();
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

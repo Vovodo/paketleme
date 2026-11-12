@@ -1,19 +1,20 @@
 services:
-  paketleme-app:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    expose:
+      - "8000"
     environment:
+      - SERVICE_FQDN_APP_8000
       - DATABASE_URL=${DATABASE_URL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-twjsQ0_vay}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
-      - PORT=${PORT:-8000}
+      - PORT=8000
       - APP_ENV=${APP_ENV:-production}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
-    ports:
-      - "${PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s

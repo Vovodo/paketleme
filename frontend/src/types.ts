@@ -45,6 +45,12 @@ export interface StockItemDetail extends StockItem {
   movements: StockMovement[];
 }
 
+export interface ScanAutoResponse {
+  action_performed: 'DEDUCTED' | 'RESTORED';
+  quantity_changed: number;
+  item: StockItemDetail;
+}
+
 export interface ReferenceLevelGroup {
   reference: string;
   level: string;
@@ -88,6 +94,8 @@ export interface ProductionMatchResult {
 export interface Suggestions {
   references: string[];
   levels: string[];
+  top_locations: string[];
+  top_operators: string[];
 }
 
 export interface TelegramSettings {

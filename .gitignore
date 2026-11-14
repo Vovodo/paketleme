@@ -22,3 +22,4 @@ backend/.env
 .idea/
 Thumbs.db
 .DS_Store
+backend/scripts/_*.py

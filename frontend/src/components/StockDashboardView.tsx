@@ -3,8 +3,10 @@ import {
   AlertTriangle,
   Boxes,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Edit3,
+  FileSpreadsheet,
   Layers,
   ListChecks,
   PackageSearch,
@@ -15,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../api';
+import { resolveCanonicalLevelClient } from '../levelUtils';
 import {
   ProductionMatchResult,
   StockDashboardSummary,
@@ -70,12 +73,55 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
   const [editLevel, setEditLevel] = useState('');
   const [editQty, setEditQty] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [editCreatedBy, setEditCreatedBy] = useState('');
 
   const [matchInput, setMatchInput] = useState('');
   const [matchResults, setMatchResults] = useState<ProductionMatchResult[] | null>(null);
   const [matching, setMatching] = useState(false);
   const [actionBusyId, setActionBusyId] = useState<number | null>(null);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [excelMenuOpen, setExcelMenuOpen] = useState(false);
+  const excelMenuRef = React.useRef<HTMLDivElement>(null);
   const reqSeqRef = React.useRef(0);
+
+  useEffect(() => {
+    if (!excelMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (excelMenuRef.current && !excelMenuRef.current.contains(e.target as Node)) {
+        setExcelMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [excelMenuOpen]);
+
+  const handleExportExcel = async (mode: 'current' | 'active' | 'all') => {
+    setExcelMenuOpen(false);
+    if (exportingExcel) return;
+    setExportingExcel(true);
+    try {
+      if (mode === 'active') {
+        await api.exportStockExcel({ status: 'ACTIVE', sort: sortBy });
+      } else if (mode === 'all') {
+        await api.exportStockExcel({ status: 'ALL', sort: 'newest' });
+      } else {
+        await api.exportStockExcel({
+          q: search || undefined,
+          level: levelFilter || undefined,
+          status: statusFilter,
+          sort: sortBy,
+        });
+      }
+      setToastBanner({
+        kind: 'success',
+        message: 'Stok tablosu Excel (.xlsx) dosyası olarak indirildi.',
+      });
+    } catch (err: any) {
+      alert(err.message || 'Excel dosyası oluşturulamadı.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
 
   const parseMatchQueries = (raw: string) => {
     const lines = raw
@@ -231,6 +277,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
     setEditLevel(item.level);
     setEditQty(String(item.remaining_quantity > 0 ? item.remaining_quantity : item.initial_quantity));
     setEditNote(item.location_note || '');
+    setEditCreatedBy(item.created_by || '');
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {
@@ -247,6 +294,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
         level: editLevel.trim(),
         remaining_quantity: numQty,
         location_note: editNote,
+        created_by: editCreatedBy,
       });
       applyItemPatchInMemory(updated);
       setEditingItem(null);
@@ -424,6 +472,72 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
             Üretim &amp; Level Eşleştirme Kontrolü
           </button>
         </div>
+
+        {/* Excel'e Aktar Butonu */}
+        <div ref={excelMenuRef} className="relative flex items-center">
+          <div className="inline-flex rounded-xl shadow-sm">
+            <button
+              type="button"
+              disabled={exportingExcel}
+              onClick={() => handleExportExcel('current')}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-l-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white text-xs sm:text-sm font-extrabold transition cursor-pointer"
+              title="Ekrandaki stok listesini ve Referans/Level özetini Excel (.xlsx) olarak indir"
+            >
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <span>{exportingExcel ? 'Hazırlanıyor...' : "Excel'e Aktar (.xlsx)"}</span>
+            </button>
+            <button
+              type="button"
+              disabled={exportingExcel}
+              onClick={() => setExcelMenuOpen((v) => !v)}
+              className="inline-flex items-center px-2.5 py-2.5 rounded-r-xl bg-emerald-700 hover:bg-emerald-800 disabled:bg-emerald-400 text-white border-l border-emerald-500/60 transition cursor-pointer"
+              title="Excel aktarım seçenekleri"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          </div>
+
+          {excelMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-72 rounded-xl bg-white border border-slate-200 shadow-xl z-30 py-1.5 text-left">
+              <button
+                type="button"
+                onClick={() => handleExportExcel('active')}
+                className="w-full px-3.5 py-2.5 hover:bg-slate-50 text-left transition cursor-pointer"
+              >
+                <div className="text-xs font-extrabold text-slate-900">
+                  Aktif Depo Stoğu (.xlsx)
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Depodaki + talep edilen tüm etiketler ve Referans/Level özeti
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportExcel('current')}
+                className="w-full px-3.5 py-2.5 hover:bg-slate-50 text-left border-t border-slate-100 transition cursor-pointer"
+              >
+                <div className="text-xs font-extrabold text-slate-900">
+                  Mevcut Filtreli Görünüm (.xlsx)
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Seçili arama, level ve durum filtresine uyan kayıtlar
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportExcel('all')}
+                className="w-full px-3.5 py-2.5 hover:bg-slate-50 text-left border-t border-slate-100 transition cursor-pointer"
+              >
+                <div className="text-xs font-extrabold text-slate-900">
+                  Tüm Kayıtlar — Arşiv Dahil (.xlsx)
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Aktif stoklar + geçmişte stoktan düşülmüş tüm etiketler
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ÜRETİM EŞLEŞTİRME MODÜLÜ */}
@@ -540,6 +654,11 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                               <span className="text-sm font-black text-emerald-700">
                                 {it.remaining_quantity} Adet
                               </span>
+                              {it.created_by && (
+                                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-bold">
+                                  {it.created_by}
+                                </span>
+                              )}
                               {it.location_note && (
                                 <span className="text-xs text-slate-500 font-medium">
                                   ({it.location_note})
@@ -622,7 +741,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Referans, Etiket No (PKT-...) veya Not ara..."
+              placeholder="Referans, Etiket No (PKT-...), Personel/Hat veya Not ara..."
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 focus:border-blue-600 text-sm font-semibold outline-none"
             />
           </div>
@@ -770,6 +889,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                     <th className="py-3.5 px-4">Referans</th>
                     <th className="py-3.5 px-4">Level</th>
                     <th className="py-3.5 px-4 text-right">Miktar</th>
+                    <th className="py-3.5 px-4">Personel / Hat</th>
                     <th className="py-3.5 px-4">Konum / Not</th>
                     <th className="py-3.5 px-4">Depo Süresi</th>
                     <th className="py-3.5 px-4">Durum</th>
@@ -798,6 +918,15 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                           <span className="text-xs text-slate-400 ml-1">
                             / {it.initial_quantity}
                           </span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 text-xs font-bold text-slate-700 max-w-[150px] truncate">
+                        {it.created_by ? (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs">
+                            {it.created_by}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 font-normal">-</span>
                         )}
                       </td>
                       <td className="py-3.5 px-4 text-xs text-slate-600 max-w-[180px] truncate">
@@ -1007,6 +1136,18 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                     required
                     value={editLevel}
                     onChange={(e) => setEditLevel(e.target.value.toUpperCase())}
+                    onBlur={() => {
+                      const known = Array.from(
+                        new Set([
+                          ...(summary?.groups.map((g) => g.level) || []),
+                          ...items.map((x) => x.level),
+                        ])
+                      );
+                      const clean = resolveCanonicalLevelClient(editLevel, known);
+                      if (clean && clean !== editLevel) {
+                        setEditLevel(clean);
+                      }
+                    }}
                     className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-base font-extrabold uppercase outline-none"
                   />
                 </div>
@@ -1029,6 +1170,19 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                   type="text"
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-medium outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Personel / Hat
+                </label>
+                <input
+                  type="text"
+                  value={editCreatedBy}
+                  onChange={(e) => setEditCreatedBy(e.target.value)}
+                  placeholder="Örn: Paketleme Hat-1"
                   className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-medium outline-none"
                 />
               </div>

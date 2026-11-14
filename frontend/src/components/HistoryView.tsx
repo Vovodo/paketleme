@@ -9,6 +9,7 @@ const ACTION_LABELS: Record<string, { text: string; cls: string }> = {
   CANCEL_REQUEST: { text: 'Talep İptal', cls: 'bg-slate-100 text-slate-700' },
   DEDUCTED: { text: 'Tamamı Stoktan Düşüldü', cls: 'bg-emerald-100 text-emerald-800' },
   PARTIAL_DEDUCTED: { text: 'Kısmi Stok Düşümü', cls: 'bg-purple-100 text-purple-800' },
+  INCREASED: { text: 'Miktar Artırıldı', cls: 'bg-sky-100 text-sky-800' },
   RESTORED: { text: 'Stoğa Geri Alındı', cls: 'bg-cyan-100 text-cyan-800' },
   UPDATED: { text: 'Düzenlendi', cls: 'bg-slate-200 text-slate-800' },
 };

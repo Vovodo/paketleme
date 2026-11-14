@@ -55,6 +55,72 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _normalize_existing_levels(conn) -> None:
+    """
+    Mevcut tablodaki yazım farklılığı olan level kayıtlarını tekilleştirir:
+    - Tek parçalı levellerde ('1 AA', '1-AA' -> '1AA'; '1 AD' -> '1AD') standart bitişik formu uygular.
+    - Çok parçalı levellerde ('1AA-P05', '1AD P02' vb.) aynı parmak izine sahip en eski kaydın formatını korur.
+    """
+    from .qr_utils import build_qr_payload, format_standard_level, level_key, parse_level_segments
+
+    rows = (
+        conn.execute(
+            text(
+                """
+                SELECT id, label_code, reference, level, remaining_quantity, initial_quantity
+                FROM stock_items
+                ORDER BY created_at ASC, id ASC
+                """
+            )
+        )
+        .mappings()
+        .all()
+    )
+    if not rows:
+        return
+
+    canonical_by_key: dict[str, str] = {}
+    updates: list[dict] = []
+
+    for r in rows:
+        raw_lvl = r["level"] or ""
+        k = level_key(raw_lvl)
+        if not k:
+            continue
+
+        if k not in canonical_by_key:
+            segs = parse_level_segments(raw_lvl)
+            if len(segs) <= 1:
+                canonical_by_key[k] = format_standard_level(raw_lvl)
+            else:
+                # İlk kaydedilen çok parçalı level tek parçalı iç boşluk içeriyorsa temizle (örn. '1 AD P 02' -> '1AD P02'),
+                # aksi halde tireli/boşluklu ilk tercihi ('1AA-P05' veya '1AD P02') koru
+                norm_first = raw_lvl.strip()
+                if "-" in norm_first and len(segs) == 2 and norm_first == f"{segs[0]}-{segs[1]}":
+                    canonical_by_key[k] = norm_first
+                elif norm_first == "".join(segs):
+                    canonical_by_key[k] = norm_first
+                else:
+                    canonical_by_key[k] = " ".join(segs)
+
+        target_lvl = canonical_by_key[k]
+        if raw_lvl != target_lvl:
+            qty_for_qr = (
+                int(r["remaining_quantity"])
+                if int(r["remaining_quantity"]) > 0
+                else int(r["initial_quantity"])
+            )
+            new_qr = build_qr_payload(r["label_code"], r["reference"], target_lvl, qty_for_qr)
+            updates.append({"id": r["id"], "lvl": target_lvl, "qr": new_qr})
+
+    if updates:
+        conn.execute(
+            text("UPDATE stock_items SET level = :lvl, qr_payload = :qr WHERE id = :id"),
+            updates,
+        )
+        logger.info("Mevcut %d stok kaydının Level bilgisi standartlaştırıldı.", len(updates))
+
+
 def init_db() -> None:
     from . import models  # noqa: F401
 
@@ -67,6 +133,9 @@ def init_db() -> None:
         conn.execute(
             text("ALTER TABLE stock_items ALTER COLUMN qr_payload TYPE VARCHAR(512);")
         )
+
+        # Mevcut veritabanındaki bölünmüş Level kayıtlarını (örn: '1 AA' -> '1AA', '1 AD' -> '1AD') birleştir
+        _normalize_existing_levels(conn)
 
         # 1. Aktif stoklar için FIFO ve En Yeni sıralamalı kısmi (partial) indeksler
         conn.execute(
@@ -103,6 +172,12 @@ def init_db() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_stock_lvl_pattern "
                 "ON stock_items (level varchar_pattern_ops);"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_stock_level_key "
+                "ON stock_items ((regexp_replace(level, '[^A-Z0-9]', '', 'g')) varchar_pattern_ops);"
             )
         )
         # 4. Bugün düşülenler ve geçmiş sıralaması için composite indeksler

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Eye, PlusCircle, Printer, RotateCcw } from 'lucide-react';
 import { api } from '../api';
+import { levelKey, resolveCanonicalLevelClient } from '../levelUtils';
 import { PaperFormat, StockItem, Suggestions } from '../types';
 import { AutocompleteInput } from './AutocompleteInput';
 import { PrintableLabel } from './PrintableLabel';
@@ -28,7 +29,12 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
     return saved === null ? true : saved === 'true';
   });
 
-  const [suggestions, setSuggestions] = useState<Suggestions>({ references: [], levels: [] });
+  const [suggestions, setSuggestions] = useState<Suggestions>({
+    references: [],
+    levels: [],
+    top_locations: [],
+    top_operators: [],
+  });
   const [recentItems, setRecentItems] = useState<StockItem[]>([]);
   const [lastCreated, setLastCreated] = useState<StockItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -70,8 +76,9 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
       setError('Lütfen Referans bilgisini girin.');
       return;
     }
-    if (!level.trim()) {
-      setError('Lütfen Level bilgisini girin.');
+    const cleanLevel = resolveCanonicalLevelClient(level, suggestions.levels);
+    if (!cleanLevel || !levelKey(cleanLevel)) {
+      setError('Lütfen geçerli bir Level bilgisini girin.');
       return;
     }
     if (!quantity.trim() || !Number.isInteger(numQty) || numQty <= 0 || numQty > 100000) {
@@ -89,7 +96,7 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
       const created = await api.createStock({
         reference: reference.trim(),
         quantity: numQty,
-        level: level.trim(),
+        level: cleanLevel,
         location_note: locationNote.trim() || undefined,
         created_by: createdBy.trim() || undefined,
       });
@@ -117,6 +124,10 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
     }
   };
 
+  const previewResolvedLevel = level.trim()
+    ? resolveCanonicalLevelClient(level, suggestions.levels)
+    : '';
+
   const previewItem = {
     label_code:
       lastCreated && !reference && !level && !quantity ? lastCreated.label_code : 'PKT-YENİ',
@@ -124,7 +135,7 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
       lastCreated && !reference && !level && !quantity
         ? lastCreated.qr_payload
         : `PKT/PKT-YENI/R-${reference.trim().toUpperCase() || 'REFERANS'}/L-${
-            level.trim().toUpperCase() || 'LEVEL'
+            (previewResolvedLevel || 'LEVEL').replace(/[^A-Z0-9._-]/g, '-')
           }/Q-${parseInt(quantity, 10) || 0}`,
     reference:
       lastCreated && !reference && !level && !quantity
@@ -133,7 +144,7 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
     level:
       lastCreated && !reference && !level && !quantity
         ? lastCreated.level
-        : level.trim() || 'HZE-1',
+        : previewResolvedLevel || '1AD P02',
     remaining_quantity:
       lastCreated && !reference && !level && !quantity
         ? lastCreated.remaining_quantity
@@ -142,6 +153,10 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
       lastCreated && !reference && !level && !quantity
         ? lastCreated.location_note
         : locationNote.trim() || null,
+    created_by:
+      lastCreated && !reference && !level && !quantity
+        ? lastCreated.created_by
+        : createdBy.trim() || null,
     created_at:
       lastCreated && !reference && !level && !quantity ? lastCreated.created_at : undefined,
   };
@@ -233,9 +248,18 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
                   value={level}
                   onChange={setLevel}
                   options={suggestions.levels}
-                  placeholder="Örn: PO6 / HZE-1"
+                  matchMode="level"
+                  onBlurNormalize={(v) => resolveCanonicalLevelClient(v, suggestions.levels)}
+                  placeholder="Örn: 1AA / 1AD P02"
                   required
                 />
+                {level.trim() &&
+                  previewResolvedLevel &&
+                  previewResolvedLevel !== level.trim().toUpperCase() && (
+                    <div className="mt-1 text-xs font-bold text-blue-700">
+                      Otomatik standart yazım: <span className="font-mono-code">{previewResolvedLevel}</span>
+                    </div>
+                  )}
               </div>
             </div>
 
@@ -244,12 +268,16 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
                 <label className="block text-xs font-bold text-slate-600 mb-1">
                   KONUM / RAF / NOT (İsteğe Bağlı)
                 </label>
-                <input
-                  type="text"
+                <AutocompleteInput
                   value={locationNote}
-                  onChange={(e) => setLocationNote(e.target.value)}
+                  onChange={setLocationNote}
+                  options={suggestions.top_locations}
+                  size="compact"
+                  openOnFocus
+                  uppercase={false}
+                  maxVisibleOptions={5}
+                  dropdownTitle="En Sık Kullanılan 5 Konum / Not"
                   placeholder="Örn: Raf B-3 / Koli 2"
-                  className="w-full rounded-xl border border-slate-300 focus:border-blue-600 px-3.5 py-2.5 text-sm font-medium text-slate-800 outline-none"
                 />
               </div>
 
@@ -257,12 +285,16 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
                 <label className="block text-xs font-bold text-slate-600 mb-1">
                   PERSONEL / HAT (İsteğe Bağlı)
                 </label>
-                <input
-                  type="text"
+                <AutocompleteInput
                   value={createdBy}
-                  onChange={(e) => setCreatedBy(e.target.value)}
+                  onChange={setCreatedBy}
+                  options={suggestions.top_operators}
+                  size="compact"
+                  openOnFocus
+                  uppercase={false}
+                  maxVisibleOptions={5}
+                  dropdownTitle="En Sık Kullanılan 5 Personel / Hat"
                   placeholder="Örn: Paketleme Hat-1"
-                  className="w-full rounded-xl border border-slate-300 focus:border-blue-600 px-3.5 py-2.5 text-sm font-medium text-slate-800 outline-none"
                 />
               </div>
             </div>

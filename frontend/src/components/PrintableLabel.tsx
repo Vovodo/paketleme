@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { PaperFormat } from '../types';
 
@@ -10,6 +10,7 @@ interface PrintableLabelProps {
     level: string;
     remaining_quantity: number;
     location_note?: string | null;
+    created_by?: string | null;
     created_at?: string;
   };
   paperFormat: PaperFormat;
@@ -51,29 +52,105 @@ function getRefFontSize(refText: string, format: PaperFormat): string {
   return `${Math.round(pt * scale)}pt`;
 }
 
-function getSubValueFontSize(text: string, format: PaperFormat): string {
+function getQtyFontSize(text: string, format: PaperFormat): string {
   const len = Math.max(text.length, 1);
   const scale = format === 'thermal-150x100' ? 0.5 : format === 'a5-landscape' ? 0.7 : 1;
 
-  let pt = 84;
-  if (len <= 4) pt = 92;
-  else if (len <= 7) pt = 74;
-  else if (len <= 10) pt = 58;
-  else pt = 44;
+  let pt = 88;
+  if (len <= 3) pt = 96;
+  else if (len <= 5) pt = 78;
+  else pt = 60;
 
   return `${Math.round(pt * scale)}pt`;
 }
+
+/**
+ * Tek satırda kalarak (asla alt satıra taşmadan) SVG metninin gerçek piksel genişliğini
+ * (getComputedTextLength) ölçer ve kutu genişliğini maksimum okunaklılıkla dolduracak
+ * viewBox değerini otomatik ayarlar. Baskı katmanı gizliyken bile güvenli ön hesap yapar.
+ */
+const SingleLineAutoFitText: React.FC<{
+  text: string;
+  heightStyle: string;
+  minComfortWidthUnits?: number;
+}> = ({ text, heightStyle, minComfortWidthUnits = 340 }) => {
+  const clean = text || '-';
+  const svgRef = useRef<SVGSVGElement>(null);
+  const textRef = useRef<SVGTextElement>(null);
+
+  const fallbackUnits = Array.from(clean).reduce((acc, ch) => {
+    if (ch === ' ') return acc + 0.36;
+    if (ch === '-' || ch === '/' || ch === '.') return acc + 0.48;
+    if (ch === 'I' || ch === '1') return acc + 0.68;
+    return acc + 0.88;
+  }, 0);
+
+  const initialViewWidth = Math.max(
+    minComfortWidthUnits,
+    Math.ceil(fallbackUnits * 68 + 18)
+  );
+
+  useLayoutEffect(() => {
+    const svgEl = svgRef.current;
+    const txtEl = textRef.current;
+    if (!svgEl || !txtEl) return;
+
+    try {
+      const measured = txtEl.getComputedTextLength();
+      if (measured > 0) {
+        const padded = Math.max(minComfortWidthUnits, Math.ceil(measured + 16));
+        svgEl.setAttribute('viewBox', `0 0 ${padded} 100`);
+        txtEl.setAttribute('x', String(padded / 2));
+      }
+    } catch {
+      // Gizli print katmanında ölçüm desteklenmezse hassas fallback devrede kalır
+    }
+  }, [clean, minComfortWidthUnits]);
+
+  return (
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${initialViewWidth} 100`}
+      preserveAspectRatio="xMidYMid meet"
+      style={{
+        width: '100%',
+        height: heightStyle,
+        display: 'block',
+        overflow: 'hidden',
+      }}
+    >
+      <text
+        ref={textRef}
+        x={initialViewWidth / 2}
+        y={54}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fill="currentColor"
+        style={{
+          fontFamily: "'Inter', Arial, Helvetica, sans-serif",
+          fontWeight: 900,
+          fontSize: '88px',
+          letterSpacing: '-0.02em',
+        }}
+      >
+        {clean}
+      </text>
+    </svg>
+  );
+};
 
 export const PrintableLabel: React.FC<PrintableLabelProps> = ({
   item,
   paperFormat,
   isPreview = false,
 }) => {
-  const refDisplay = (item.reference || 'REFERANS').toUpperCase();
-  const lvlDisplay = (item.level || 'LEVEL').toUpperCase();
+  const refDisplay = (item.reference || 'REFERANS').toLocaleUpperCase('tr-TR');
+  const lvlDisplay = (item.level || 'LEVEL').toLocaleUpperCase('tr-TR');
   const qtyDisplay = String(item.remaining_quantity || 0);
+  const noteDisplay = item.location_note ? item.location_note.trim().toLocaleUpperCase('tr-TR') : '';
+  const operatorDisplay = item.created_by ? item.created_by.trim().toLocaleUpperCase('tr-TR') : '';
   const qrSize =
-    paperFormat === 'thermal-150x100' ? 112 : paperFormat === 'a5-landscape' ? 148 : 205;
+    paperFormat === 'thermal-150x100' ? 112 : paperFormat === 'a5-landscape' ? 148 : 200;
 
   const formattedDate = item.created_at
     ? new Date(item.created_at).toLocaleString('tr-TR', {
@@ -94,7 +171,7 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
   if (isPreview) {
     return (
       <div className="w-full aspect-[1.44/1] bg-white text-black border-4 border-black rounded-lg p-3 sm:p-4 flex flex-col justify-between shadow-sm select-none overflow-hidden">
-        {/* Üst Bant */}
+        {/* Üst Bant (Konumu kesinlikle sabit) */}
         <div className="flex items-center justify-between bg-black text-white px-3 py-1.5 rounded-sm">
           <span className="text-[11px] sm:text-xs font-black tracking-widest uppercase">
             PAKETSİZ KILIF DEPO ETİKETİ
@@ -105,8 +182,13 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
           </div>
         </div>
 
-        {/* Orta Referans */}
-        <div className="flex-1 flex flex-col justify-center items-center border-b-4 border-black py-2 px-2 text-center min-h-0">
+        {/* Orta Referans (Sağ üst köşede mutlak konumlu Personel/Hat bilgisi; hiçbir yazıyı kaydırmaz) */}
+        <div className="relative flex-1 flex flex-col justify-center items-center border-b-4 border-black py-2 px-2 text-center min-h-0">
+          {operatorDisplay && (
+            <div className="absolute right-1.5 top-1.5 max-w-[38%] truncate border border-black bg-neutral-50 px-2 py-0.5 text-[10px] sm:text-xs font-black tracking-wider uppercase text-black leading-tight">
+              {operatorDisplay}
+            </div>
+          )}
           <span className="text-[10px] sm:text-xs font-extrabold tracking-[0.25em] uppercase text-neutral-600 mb-0.5">
             REFERANS
           </span>
@@ -123,27 +205,27 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
           >
             {refDisplay}
           </div>
-          {item.location_note && (
-            <div className="mt-1.5 text-xs font-bold bg-neutral-100 border border-black px-2.5 py-0.5 uppercase max-w-full line-clamp-2 break-words">
-              NOT / KONUM: {item.location_note}
+          {noteDisplay && (
+            <div className="mt-2 text-base sm:text-xl font-black bg-neutral-100 border-2 border-black px-3.5 py-1 uppercase max-w-full line-clamp-2 break-words tracking-wide leading-tight">
+              {noteDisplay}
             </div>
           )}
         </div>
 
         {/* Alt Kısım: Level + Miktar + Köşede QR */}
         <div className="grid grid-cols-12 gap-2 pt-2 items-stretch">
-          <div className="col-span-5 border-3 border-black p-2 flex flex-col justify-between items-center text-center">
+          <div className="col-span-6 border-3 border-black px-2.5 py-2 flex flex-col justify-between items-center text-center min-w-0">
             <span className="text-[10px] font-black tracking-widest uppercase">LEVEL</span>
-            <span className="text-2xl sm:text-4xl font-black leading-none tracking-tight my-auto py-1 break-all">
-              {lvlDisplay}
-            </span>
+            <div className="w-full my-auto py-1 flex items-center justify-center">
+              <SingleLineAutoFitText text={lvlDisplay} heightStyle="2.75rem" minComfortWidthUnits={330} />
+            </div>
           </div>
 
-          <div className="col-span-4 bg-black text-white p-2 flex flex-col justify-between items-center text-center">
+          <div className="col-span-3 bg-black text-white p-2 flex flex-col justify-between items-center text-center min-w-0">
             <span className="text-[10px] font-black tracking-widest uppercase text-neutral-200">
               MİKTAR (ADET)
             </span>
-            <span className="text-3xl sm:text-5xl font-black leading-none my-auto py-1">
+            <span className="text-3xl sm:text-5xl font-black leading-none my-auto py-1 whitespace-nowrap">
               {qtyDisplay}
             </span>
           </div>
@@ -166,6 +248,8 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
 
   const dims = getSheetDimensions(paperFormat);
   const isThermal = paperFormat === 'thermal-150x100';
+  const isA5 = paperFormat === 'a5-landscape';
+  const levelSvgHeight = isThermal ? '19mm' : isA5 ? '27mm' : '38mm';
 
   return (
     <>
@@ -228,6 +312,7 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
 
         <div
           style={{
+            position: 'relative',
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
@@ -236,8 +321,31 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
             borderBottom: isThermal ? '3px solid #000' : '6px solid #000',
             padding: isThermal ? '2mm 1mm' : '3mm 2mm',
             textAlign: 'center',
+            minHeight: 0,
           }}
         >
+          {operatorDisplay && (
+            <div
+              style={{
+                position: 'absolute',
+                top: isThermal ? '1.5mm' : '2.5mm',
+                right: isThermal ? '1mm' : '1.5mm',
+                maxWidth: '38%',
+                border: isThermal ? '1.5px solid #000' : '2px solid #000',
+                padding: isThermal ? '0.6mm 2mm' : '1mm 3.5mm',
+                fontSize: isThermal ? '9pt' : isA5 ? '12pt' : '15pt',
+                fontWeight: 900,
+                letterSpacing: '0.06em',
+                lineHeight: 1.15,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                backgroundColor: '#ffffff',
+              }}
+            >
+              {operatorDisplay}
+            </div>
+          )}
           <div
             style={{
               fontSize: isThermal ? '10pt' : '16pt',
@@ -260,14 +368,16 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
           >
             {refDisplay}
           </div>
-          {item.location_note && (
+          {noteDisplay && (
             <div
               style={{
-                marginTop: '2mm',
-                border: '2px solid #000',
-                padding: '1mm 4mm',
-                fontSize: isThermal ? '9pt' : '13pt',
-                fontWeight: 800,
+                marginTop: isThermal ? '2mm' : '3.5mm',
+                border: isThermal ? '2px solid #000' : '3px solid #000',
+                padding: isThermal ? '1.2mm 4mm' : '2mm 6mm',
+                fontSize: isThermal ? '13pt' : isA5 ? '18pt' : '24pt',
+                fontWeight: 900,
+                letterSpacing: '0.03em',
+                lineHeight: 1.15,
                 maxWidth: '96%',
                 overflow: 'hidden',
                 display: '-webkit-box',
@@ -276,7 +386,7 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
                 wordBreak: 'break-word',
               }}
             >
-              NOT / KONUM: {item.location_note.toUpperCase()}
+              {noteDisplay}
             </div>
           )}
         </div>
@@ -284,7 +394,7 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: isThermal ? '1.2fr 1fr auto' : '1.25fr 1fr auto',
+            gridTemplateColumns: isThermal ? '1.45fr 0.85fr auto' : '1.5fr 0.85fr auto',
             gap: isThermal ? '3mm' : '5mm',
             paddingTop: isThermal ? '2.5mm' : '4mm',
             alignItems: 'stretch',
@@ -293,12 +403,14 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
           <div
             style={{
               border: isThermal ? '3px solid #000' : '5px solid #000',
-              padding: isThermal ? '2mm' : '3mm 4mm',
+              padding: isThermal ? '2mm 2.5mm' : '3mm 4.5mm',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'space-between',
               textAlign: 'center',
+              minWidth: 0,
+              overflow: 'hidden',
             }}
           >
             <div
@@ -312,14 +424,18 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
             </div>
             <div
               style={{
-                fontSize: getSubValueFontSize(lvlDisplay, paperFormat),
-                fontWeight: 900,
-                lineHeight: 1,
+                width: '100%',
                 margin: 'auto 0',
-                wordBreak: 'break-all',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              {lvlDisplay}
+              <SingleLineAutoFitText
+                text={lvlDisplay}
+                heightStyle={levelSvgHeight}
+                minComfortWidthUnits={330}
+              />
             </div>
           </div>
 
@@ -328,29 +444,32 @@ export const PrintableLabel: React.FC<PrintableLabelProps> = ({
               border: isThermal ? '3px solid #000' : '5px solid #000',
               backgroundColor: '#000000',
               color: '#ffffff',
-              padding: isThermal ? '2mm' : '3mm 4mm',
+              padding: isThermal ? '2mm' : '3mm 3.5mm',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'space-between',
               textAlign: 'center',
+              minWidth: 0,
             }}
           >
             <div
               style={{
-                fontSize: isThermal ? '10pt' : '16pt',
+                fontSize: isThermal ? '10pt' : '15pt',
                 fontWeight: 900,
-                letterSpacing: '0.18em',
+                letterSpacing: '0.15em',
+                whiteSpace: 'nowrap',
               }}
             >
               MİKTAR (ADET)
             </div>
             <div
               style={{
-                fontSize: getSubValueFontSize(qtyDisplay, paperFormat),
+                fontSize: getQtyFontSize(qtyDisplay, paperFormat),
                 fontWeight: 900,
                 lineHeight: 1,
                 margin: 'auto 0',
+                whiteSpace: 'nowrap',
               }}
             >
               {qtyDisplay}

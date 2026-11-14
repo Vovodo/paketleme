@@ -20,6 +20,10 @@ TR_CHAR_MAP = str.maketrans(
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff]")
 NBSP_RE = re.compile(r"[\xa0\u2000-\u200a\u202f\u205f\u3000]")
+PURE_DIGITS_RE = re.compile(r"^\d+$")
+PURE_ALPHA_RE = re.compile(r"^[A-Z]+$")
+# Bitişik yazılmış iki parçalı level kalıbı: örn. 1ADP02 -> ('1AD', 'P02'), 1AAP05 -> ('1AA', 'P05')
+LEVEL_COMPOUND_RE = re.compile(r"^(\d+[A-Z]{1,3})([A-Z]\d{1,4})$")
 
 
 def normalize_code(value: str) -> str:
@@ -32,6 +36,95 @@ def normalize_code(value: str) -> str:
     translated = norm_space.translate(TR_CHAR_MAP).upper()
     cleaned = re.sub(r"\s+", " ", translated).strip()
     return cleaned
+
+
+def level_key(value: str) -> str:
+    """
+    Level için tüm ayırıcılardan (boşluk, -, /, _, . vb.) arındırılmış
+    büyük harf ASCII eşdeğerlik anahtarı (parmak izi) üretir.
+    Örnekler:
+      '1AA', '1 AA', '1-AA', '1/aa', '1Aa' -> '1AA'
+      '1AD P02', '1ADp02', '1AD-P02'       -> '1ADP02'
+      '1AA-P05', '1AA P05', '1AAP05'       -> '1AAP05'
+      'P07' -> 'P07'  ('1ADP07' ile kesinlikle eşleşmez)
+    """
+    norm = normalize_code(value)
+    return re.sub(r"[^A-Z0-9]", "", norm)
+
+
+def parse_level_segments(value: str) -> list[str]:
+    """
+    Level bilgisini mantıksal revizyon/faz parçalarına ayırır:
+    - Tek parçalı bir kodun içindeki hatalı boşluk/tire/taksimi birleştirir:
+        '1 AA', '1-AA', '1/aa' -> ['1AA']
+        'P 07', 'p-07'         -> ['P07']
+    - Bitişik yazılmış iki parçalı kodları ayırır:
+        '1ADp02', '1ADP02'     -> ['1AD', 'P02']
+        '1AAP05'               -> ['1AA', 'P05']
+    - Çok parçalı ayrı yazımları temizleyerek korur:
+        '1 AD P 02'            -> ['1AD', 'P02']
+        '1AA-P05'              -> ['1AA', 'P05']
+    """
+    norm = normalize_code(value)
+    if not norm:
+        return []
+
+    raw_tokens = [t for t in re.split(r"[^A-Z0-9]+", norm) if t]
+    if not raw_tokens:
+        return []
+
+    merged: list[str] = []
+    i = 0
+    while i < len(raw_tokens):
+        cur = raw_tokens[i]
+        if i + 1 < len(raw_tokens):
+            nxt = raw_tokens[i + 1]
+            # Örn: '1' + 'AA' -> '1AA' veya '1' + 'ADP' + '02' -> '1ADP02'
+            if PURE_DIGITS_RE.fullmatch(cur) and re.match(r"^[A-Z]", nxt):
+                merged_tok = cur + nxt
+                i += 2
+                if (
+                    PURE_ALPHA_RE.fullmatch(nxt)
+                    and len(nxt) >= 3
+                    and i < len(raw_tokens)
+                    and PURE_DIGITS_RE.fullmatch(raw_tokens[i])
+                ):
+                    merged_tok += raw_tokens[i]
+                    i += 1
+                merged.append(merged_tok)
+                continue
+
+            # Örn: 'P' + '07' -> 'P07'
+            if PURE_ALPHA_RE.fullmatch(cur) and PURE_DIGITS_RE.fullmatch(nxt):
+                merged.append(cur + nxt)
+                i += 2
+                continue
+
+        merged.append(cur)
+        i += 1
+
+    segments: list[str] = []
+    for tok in merged:
+        m = LEVEL_COMPOUND_RE.fullmatch(tok)
+        if m:
+            segments.append(m.group(1))
+            segments.append(m.group(2))
+        else:
+            segments.append(tok)
+
+    return segments
+
+
+def format_standard_level(value: str) -> str:
+    """
+    Daha önce veritabanında kaydı olmayan bir level için standart yazım üretir:
+    - Tek parçalı leveller bitişik: '1AA', '1AD', 'P07', 'AA'
+    - İki/çok parçalı leveller tek boşluklu: '1AD P02', '1AA P05'
+    """
+    segs = parse_level_segments(value)
+    if not segs:
+        return ""
+    return " ".join(segs)
 
 
 def escape_like(value: str) -> str:

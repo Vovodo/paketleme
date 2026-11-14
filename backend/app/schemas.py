@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .qr_utils import normalize_code
+from .qr_utils import level_key, normalize_code
 
 
 class StockCreateRequest(BaseModel):
@@ -12,12 +12,20 @@ class StockCreateRequest(BaseModel):
     location_note: Optional[str] = Field(default=None, max_length=200, description="Opsiyonel Raf / Konum / Not")
     created_by: Optional[str] = Field(default=None, max_length=100, description="Opsiyonel Personel / Hat Adı")
 
-    @field_validator("reference", "level")
+    @field_validator("reference")
     @classmethod
-    def must_not_be_blank(cls, v: str) -> str:
+    def ref_must_not_be_blank(cls, v: str) -> str:
         norm = normalize_code(v)
         if not norm:
-            raise ValueError("Bu alan boş bırakılamaz.")
+            raise ValueError("Referans alanı boş bırakılamaz.")
+        return norm
+
+    @field_validator("level")
+    @classmethod
+    def level_must_be_valid(cls, v: str) -> str:
+        norm = normalize_code(v)
+        if not norm or not level_key(norm):
+            raise ValueError("Geçerli bir Level bilgisi girin.")
         return norm
 
 
@@ -26,15 +34,26 @@ class StockUpdateRequest(BaseModel):
     level: Optional[str] = Field(default=None, min_length=1, max_length=80)
     remaining_quantity: Optional[int] = Field(default=None, gt=0, le=100000)
     location_note: Optional[str] = Field(default=None, max_length=200)
+    created_by: Optional[str] = Field(default=None, max_length=100)
 
-    @field_validator("reference", "level")
+    @field_validator("reference")
     @classmethod
-    def optional_must_not_be_blank(cls, v: Optional[str]) -> Optional[str]:
+    def optional_ref_must_not_be_blank(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
         norm = normalize_code(v)
         if not norm:
-            raise ValueError("Referans ve Level alanı boş bırakılamaz.")
+            raise ValueError("Referans alanı boş bırakılamaz.")
+        return norm
+
+    @field_validator("level")
+    @classmethod
+    def optional_level_must_be_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        norm = normalize_code(v)
+        if not norm or not level_key(norm):
+            raise ValueError("Geçerli bir Level bilgisi girin.")
         return norm
 
 
@@ -55,6 +74,31 @@ class ScanDeductRequest(BaseModel):
     @field_validator("qr_or_code")
     @classmethod
     def qr_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Okutulan kod boş olamaz.")
+        return v.strip()
+
+
+class ScanRestoreRequest(BaseModel):
+    qr_or_code: str = Field(..., min_length=1, max_length=512, description="QR Kod içeriği veya Etiket Kodu")
+    note: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("qr_or_code")
+    @classmethod
+    def qr_restore_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Okutulan kod boş olamaz.")
+        return v.strip()
+
+
+class ScanIncreaseRequest(BaseModel):
+    qr_or_code: str = Field(..., min_length=1, max_length=512, description="QR Kod içeriği veya Etiket Kodu")
+    add_quantity: int = Field(..., gt=0, le=100000, description="Etikete eklenecek kılıf adedi")
+    note: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("qr_or_code")
+    @classmethod
+    def qr_increase_not_blank(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("Okutulan kod boş olamaz.")
         return v.strip()
@@ -118,6 +162,12 @@ class StockItemDetailOut(StockItemOut):
     movements: list[StockMovementOut] = []
 
 
+class ScanAutoResponse(BaseModel):
+    action_performed: str
+    quantity_changed: int
+    item: StockItemDetailOut
+
+
 class ReferenceLevelGroupOut(BaseModel):
     reference: str
     level: str
@@ -156,6 +206,8 @@ class ProductionMatchResult(BaseModel):
 class SuggestionsOut(BaseModel):
     references: list[str]
     levels: list[str]
+    top_locations: list[str] = []
+    top_operators: list[str] = []
 
 
 class AdminAuthRequest(BaseModel):

@@ -528,6 +528,121 @@ class ComprehensiveSystemTests(unittest.TestCase):
         self.assertEqual(captured[0]["message_thread_id"], 5)
         self.assertIn("Depo &amp; Paketleme &lt;Hat&gt;", captured[0]["html_text"])
 
+    def test_14_scan_restore_auto_and_excel_export(self):
+        import io
+        import time
+        import openpyxl
+
+        st, _, item = api_call(
+            "POST",
+            "/api/stock",
+            {"reference": "TEST-RESTORE-QR", "quantity": 18, "level": "P09", "location_note": "=RAF-A1"},
+        )
+        self.assertEqual(st, 201)
+        self.track(item["id"])
+
+        # 1) scan-auto ilk okutmada tamamını düşmeli (DEDUCTED)
+        st_auto1, _, res1 = api_call("POST", "/api/stock/scan-auto", {"qr_or_code": item["qr_payload"]})
+        self.assertEqual(st_auto1, 200)
+        self.assertEqual(res1["action_performed"], "DEDUCTED")
+        self.assertEqual(res1["quantity_changed"], 18)
+        self.assertEqual(res1["item"]["status"], "CONSUMED")
+
+        # 2) 1.2sn dolmadan hemen tekrar okutulursa çift okutma koruması (409) devreye girmeli
+        st_bounce, _, _ = api_call("POST", "/api/stock/scan-auto", {"qr_or_code": item["qr_payload"]})
+        self.assertEqual(st_bounce, 409)
+
+        # 3) 1.3sn beklendikten sonra aynı QR okutulduğunda stoğa geri almalı (RESTORED)
+        time.sleep(1.3)
+        st_auto2, _, res2 = api_call("POST", "/api/stock/scan-auto", {"qr_or_code": item["qr_payload"]})
+        self.assertEqual(st_auto2, 200)
+        self.assertEqual(res2["action_performed"], "RESTORED")
+        self.assertEqual(res2["quantity_changed"], 18)
+        self.assertEqual(res2["item"]["status"], "IN_STOCK")
+        self.assertEqual(res2["item"]["remaining_quantity"], 18)
+
+        # 4) Açık scan-restore aktif etikette 400 dönmeli, düşürüldükten sonra 200 ile geri almalı
+        st_bad_rest, _, _ = api_call("POST", "/api/stock/scan-restore", {"qr_or_code": item["label_code"]})
+        self.assertEqual(st_bad_rest, 400)
+
+        api_call("POST", "/api/stock/scan-deduct", {"qr_or_code": item["label_code"]})
+        st_ok_rest, _, restored_detail = api_call(
+            "POST", "/api/stock/scan-restore", {"qr_or_code": item["qr_payload"]}
+        )
+        self.assertEqual(st_ok_rest, 200)
+        self.assertEqual(restored_detail["status"], "IN_STOCK")
+        self.assertEqual(restored_detail["remaining_quantity"], 18)
+
+        # 5) Excel export (.xlsx) doğrulaması ve '=' formül enjeksiyonu güvenliği
+        req = urllib.request.Request(f"{BASE_URL}/api/stock/export.xlsx?status=ACTIVE&q=TEST-RESTORE-QR")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            xlsx_bytes = resp.read()
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+        self.assertIn("Stok Etiketleri", wb.sheetnames)
+        self.assertIn("Referans Level Özeti", wb.sheetnames)
+        ws = wb["Stok Etiketleri"]
+        self.assertEqual(ws["B2"].value, "TEST-RESTORE-QR")
+        self.assertEqual(ws["G2"].value, "=RAF-A1")
+        self.assertEqual(ws["G2"].data_type, "s")
+
+    def test_15_level_canonical_normalization_and_separation(self):
+        # 1-AA, 1 aa, 1Aa, 1/aa -> hepsi 1AA olmalı
+        for raw_lvl in ["1-AA", "1 aa", "1Aa", "1/aa"]:
+            st, _, it = api_call(
+                "POST",
+                "/api/stock",
+                {"reference": "TEST-LVL-SUITE", "quantity": 4, "level": raw_lvl},
+            )
+            self.assertEqual(st, 201)
+            self.track(it["id"])
+            self.assertEqual(it["level"], "1AA")
+
+        # Yeni iki parçalı bitişik yazım -> boşluklu standart ('1AZ P98')
+        st_new, _, it_new = api_call(
+            "POST",
+            "/api/stock",
+            {"reference": "TEST-LVL-SUITE", "quantity": 6, "level": "1AZp98"},
+        )
+        self.assertEqual(st_new, 201)
+        self.track(it_new["id"])
+        self.assertEqual(it_new["level"], "1AZ P98")
+
+        # Sonraki tireli/taksimli giriş daha önce kaydedilen '1AZ P98' formatını almalı
+        st_rep, _, it_rep = api_call(
+            "POST",
+            "/api/stock",
+            {"reference": "TEST-LVL-SUITE", "quantity": 6, "level": "1AZ-P98"},
+        )
+        self.assertEqual(st_rep, 201)
+        self.track(it_rep["id"])
+        self.assertEqual(it_rep["level"], "1AZ P98")
+
+        # P07 ile 1AD P07 ayrı leveller olarak korunmalı
+        _, _, it_p07 = api_call(
+            "POST",
+            "/api/stock",
+            {"reference": "TEST-P07-DIFF", "quantity": 3, "level": "p-07"},
+        )
+        self.track(it_p07["id"])
+        self.assertEqual(it_p07["level"], "P07")
+
+        _, _, it_1ad_p07 = api_call(
+            "POST",
+            "/api/stock",
+            {"reference": "TEST-P07-DIFF", "quantity": 8, "level": "1ADp07"},
+        )
+        self.track(it_1ad_p07["id"])
+        self.assertEqual(it_1ad_p07["level"], "1AD P07")
+
+        _, _, matched = api_call(
+            "POST",
+            "/api/stock/match",
+            {"queries": [{"reference": "TEST-P07-DIFF", "level": "P07"}]},
+        )
+        self.assertEqual(matched[0]["total_exact_quantity"], 3)
+        self.assertEqual(matched[0]["total_other_quantity"], 8)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

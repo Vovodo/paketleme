@@ -1,6 +1,7 @@
 import {
   ProductionMatchItem,
   ProductionMatchResult,
+  ScanAutoResponse,
   StockDashboardSummary,
   StockDashboardViewData,
   StockItem,
@@ -128,6 +129,72 @@ export const api = {
     });
   },
 
+  scanIncrease(payload: { qr_or_code: string; add_quantity: number; note?: string }) {
+    return request<StockItemDetail>('/api/stock/scan-increase', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  scanRestore(payload: { qr_or_code: string; note?: string }) {
+    return request<StockItemDetail>('/api/stock/scan-restore', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  scanAuto(payload: { qr_or_code: string; note?: string }) {
+    return request<ScanAutoResponse>('/api/stock/scan-auto', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async exportStockExcel(params?: {
+    q?: string;
+    reference?: string;
+    level?: string;
+    status?: string;
+    sort?: string;
+  }): Promise<void> {
+    const sp = new URLSearchParams();
+    if (params?.q) sp.set('q', params.q);
+    if (params?.reference) sp.set('reference', params.reference);
+    if (params?.level) sp.set('level', params.level);
+    if (params?.status) sp.set('status', params.status);
+    if (params?.sort) sp.set('sort', params.sort);
+    const qs = sp.toString();
+
+    const res = await fetch(`${API_BASE}/api/stock/export.xlsx${qs ? `?${qs}` : ''}`);
+    if (!res.ok) {
+      let errMessage = `Excel indirilemedi (${res.status})`;
+      try {
+        const data = await res.json();
+        if (data?.detail) errMessage = String(data.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(errMessage);
+    }
+
+    const blob = await res.blob();
+    let filename = `paketleme_stok_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const disp = res.headers.get('Content-Disposition');
+    if (disp) {
+      const m = disp.match(/filename="?([^";]+)"?/i);
+      if (m?.[1]) filename = m[1];
+    }
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+  },
+
   requestFromWarehouse(id: number, requested_note?: string) {
     return request<WarehouseRequestResponse>(`/api/stock/${id}/request`, {
       method: 'POST',
@@ -154,6 +221,7 @@ export const api = {
       level?: string;
       remaining_quantity?: number;
       location_note?: string;
+      created_by?: string;
     }
   ) {
     return request<StockItem>(`/api/stock/${id}`, {

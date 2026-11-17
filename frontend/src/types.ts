@@ -1,4 +1,4 @@
-export type StockStatus = 'IN_STOCK' | 'REQUESTED' | 'CONSUMED';
+export type StockStatus = 'IN_STOCK' | 'REQUESTED' | 'TRANSFERRED' | 'CONSUMED';
 
 export interface StockMovement {
   id: number;
@@ -28,6 +28,8 @@ export interface StockItem {
   status: StockStatus;
   location_note?: string | null;
   created_by?: string | null;
+  transferred_to?: string | null;
+  transferred_at?: string | null;
   requested_at?: string | null;
   requested_note?: string | null;
   consumed_at?: string | null;
@@ -58,12 +60,18 @@ export interface ReferenceLevelGroup {
   label_count: number;
   requested_count: number;
   requested_quantity: number;
+  transferred_count: number;
+  transferred_quantity: number;
   oldest_created_at: string;
 }
 
 export interface StockDashboardSummary {
   active_label_count: number;
   active_total_quantity: number;
+  in_stock_label_count: number;
+  in_stock_total_quantity: number;
+  transferred_label_count: number;
+  transferred_total_quantity: number;
   distinct_reference_count: number;
   requested_label_count: number;
   requested_total_quantity: number;
@@ -96,6 +104,7 @@ export interface Suggestions {
   levels: string[];
   top_locations: string[];
   top_operators: string[];
+  top_transfer_targets: string[];
 }
 
 export interface TelegramSettings {

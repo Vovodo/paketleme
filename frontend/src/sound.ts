@@ -2,6 +2,7 @@ export type ScanSoundType =
   | 'deduct_full'
   | 'deduct_partial'
   | 'increased'
+  | 'transferred'
   | 'restored'
   | 'lookup_active'
   | 'lookup_consumed'
@@ -19,6 +20,11 @@ export const SCAN_SOUND_LABELS: { type: ScanSoundType; label: string; desc: stri
     type: 'deduct_partial',
     label: 'Kısmi Adet Düşümü',
     desc: 'Üçlü kısa ritmik bildirim sesi',
+  },
+  {
+    type: 'transferred',
+    label: 'Konum / Hat Transferi',
+    desc: 'Hızlı akıcı geçiş melodisi',
   },
   {
     type: 'increased',
@@ -153,6 +159,14 @@ export function playScanSound(type: ScanSoundType, opts?: { force?: boolean }): 
         { freq: 587.33, startOffset: 0, duration: 0.075, type: 'sine', gain: 0.32 },
         { freq: 880, startOffset: 0.08, duration: 0.075, type: 'sine', gain: 0.34 },
         { freq: 1174.66, startOffset: 0.16, duration: 0.16, type: 'triangle', gain: 0.36 },
+      ]);
+      break;
+
+    case 'transferred':
+      // Akıcı kayma + net varış akoru (F5 -> C6 geçiş sinyali)
+      scheduleTones(ctx, [
+        { freq: 698.46, endFreq: 1046.5, startOffset: 0, duration: 0.11, type: 'sine', gain: 0.32 },
+        { freq: 1318.5, startOffset: 0.115, duration: 0.15, type: 'triangle', gain: 0.35 },
       ]);
       break;
 

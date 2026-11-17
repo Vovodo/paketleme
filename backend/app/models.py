@@ -19,13 +19,16 @@ class StockItem(Base):
     initial_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     remaining_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Durumlar: IN_STOCK (Depoda), REQUESTED (Depodan Talep Edildi), CONSUMED (Stoktan Düşüldü)
+    # Durumlar: IN_STOCK (Depoda), REQUESTED (Depodan Talep Edildi), TRANSFERRED (Transfer Edildi), CONSUMED (Stoktan Düşüldü)
     status: Mapped[str] = mapped_column(
         String(32), index=True, nullable=False, default="IN_STOCK"
     )
 
     location_note: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    transferred_to: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    transferred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_note: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

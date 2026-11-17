@@ -34,6 +34,7 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
     levels: [],
     top_locations: [],
     top_operators: [],
+    top_transfer_targets: [],
   });
   const [recentItems, setRecentItems] = useState<StockItem[]>([]);
   const [lastCreated, setLastCreated] = useState<StockItem | null>(null);
@@ -236,7 +237,7 @@ export const CreateLabelView: React.FC<CreateLabelViewProps> = ({
                   onChange={(e) => setQuantity(e.target.value)}
                   placeholder="Örn: 20"
                   required
-                  className="w-full rounded-xl border-2 border-slate-300 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 px-4 py-3.5 text-xl font-extrabold text-slate-900 outline-none transition"
+                  className="w-full rounded-xl border-2 border-slate-400 hover:border-slate-600 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 px-4 py-3.5 text-xl font-extrabold text-slate-900 outline-none transition"
                 />
               </div>
 

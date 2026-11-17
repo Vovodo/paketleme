@@ -133,32 +133,38 @@ def init_db() -> None:
         conn.execute(
             text("ALTER TABLE stock_items ALTER COLUMN qr_payload TYPE VARCHAR(512);")
         )
+        conn.execute(
+            text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS transferred_to VARCHAR(120);")
+        )
+        conn.execute(
+            text("ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS transferred_at TIMESTAMPTZ;")
+        )
 
         # Mevcut veritabanındaki bölünmüş Level kayıtlarını (örn: '1 AA' -> '1AA', '1 AD' -> '1AD') birleştir
         _normalize_existing_levels(conn)
 
-        # 1. Aktif stoklar için FIFO ve En Yeni sıralamalı kısmi (partial) indeksler
+        # 1. Aktif stoklar (Depoda + Talep + Transfer) için FIFO ve En Yeni sıralamalı kısmi indeksler
         conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_stock_active_fifo "
+                "CREATE INDEX IF NOT EXISTS ix_stock_active_v2_fifo "
                 "ON stock_items (created_at ASC, id ASC) "
-                "WHERE status IN ('IN_STOCK', 'REQUESTED');"
+                "WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED');"
             )
         )
         conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_stock_active_newest "
+                "CREATE INDEX IF NOT EXISTS ix_stock_active_v2_newest "
                 "ON stock_items (created_at DESC, id DESC) "
-                "WHERE status IN ('IN_STOCK', 'REQUESTED');"
+                "WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED');"
             )
         )
         # 2. Grup özeti ve aktif referans/level aramaları için covering partial index
         conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_stock_active_ref_lvl_qty "
+                "CREATE INDEX IF NOT EXISTS ix_stock_active_v2_ref_lvl_qty "
                 "ON stock_items (reference, level, status) "
                 "INCLUDE (remaining_quantity, created_at) "
-                "WHERE status IN ('IN_STOCK', 'REQUESTED');"
+                "WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED');"
             )
         )
         # 3. Hızlı önek aramaları için text_pattern_ops indeksleri

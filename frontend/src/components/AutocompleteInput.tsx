@@ -180,10 +180,10 @@ export const AutocompleteInput: React.FC<AutocompleteInputProps> = ({
 
   const inputClassName =
     size === 'compact'
-      ? `w-full rounded-xl border border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 pl-3.5 pr-9 py-2.5 text-sm font-semibold text-slate-800 outline-none transition ${
+      ? `w-full rounded-xl border-2 border-slate-400 hover:border-slate-600 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 pl-3.5 pr-9 py-2.5 text-sm font-semibold text-slate-800 outline-none transition ${
           uppercase ? 'uppercase' : ''
         }`
-      : `w-full rounded-xl border-2 border-slate-300 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 pl-4 pr-10 py-3.5 text-xl font-extrabold tracking-wide text-slate-900 outline-none transition ${
+      : `w-full rounded-xl border-2 border-slate-400 hover:border-slate-600 focus:border-blue-600 focus:ring-4 focus:ring-blue-100 pl-4 pr-10 py-3.5 text-xl font-extrabold tracking-wide text-slate-900 outline-none transition ${
           uppercase ? 'uppercase' : ''
         }`;
 

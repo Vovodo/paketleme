@@ -1,17 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { History, RefreshCw, Search } from 'lucide-react';
+import { History, RefreshCw, Search, X } from 'lucide-react';
 import { api } from '../api';
 import { StockMovementWithItem } from '../types';
 
 const ACTION_LABELS: Record<string, { text: string; cls: string }> = {
-  CREATED: { text: 'Depoya Kaldırıldı', cls: 'bg-blue-100 text-blue-800' },
-  REQUESTED: { text: 'Depodan Talep Edildi', cls: 'bg-amber-100 text-amber-800' },
-  CANCEL_REQUEST: { text: 'Talep İptal', cls: 'bg-slate-100 text-slate-700' },
-  DEDUCTED: { text: 'Tamamı Stoktan Düşüldü', cls: 'bg-emerald-100 text-emerald-800' },
-  PARTIAL_DEDUCTED: { text: 'Kısmi Stok Düşümü', cls: 'bg-purple-100 text-purple-800' },
-  INCREASED: { text: 'Miktar Artırıldı', cls: 'bg-sky-100 text-sky-800' },
-  RESTORED: { text: 'Stoğa Geri Alındı', cls: 'bg-cyan-100 text-cyan-800' },
-  UPDATED: { text: 'Düzenlendi', cls: 'bg-slate-200 text-slate-800' },
+  CREATED: { text: 'Depoya Kaldırıldı', cls: 'bg-blue-100 text-blue-900 border border-blue-300' },
+  TRANSFERRED: {
+    text: 'Konum / Hat Transferi',
+    cls: 'bg-violet-100 text-violet-950 border border-violet-400',
+  },
+  REQUESTED: { text: 'Depodan Talep Edildi', cls: 'bg-amber-100 text-amber-950 border border-amber-400' },
+  CANCEL_REQUEST: { text: 'Talep İptal', cls: 'bg-slate-100 text-slate-700 border border-slate-300' },
+  DEDUCTED: { text: 'Tamamı Stoktan Düşüldü', cls: 'bg-emerald-100 text-emerald-900 border border-emerald-400' },
+  PARTIAL_DEDUCTED: { text: 'Kısmi Stok Düşümü', cls: 'bg-fuchsia-100 text-fuchsia-900 border border-fuchsia-300' },
+  INCREASED: { text: 'Miktar Artırıldı', cls: 'bg-sky-100 text-sky-900 border border-sky-300' },
+  RESTORED: { text: 'Stoğa Geri Alındı', cls: 'bg-cyan-100 text-cyan-900 border border-cyan-300' },
+  UPDATED: { text: 'Düzenlendi', cls: 'bg-slate-200 text-slate-800 border border-slate-300' },
 };
 
 export const HistoryView: React.FC<{ refreshKey: number }> = ({ refreshKey }) => {
@@ -38,27 +42,37 @@ export const HistoryView: React.FC<{ refreshKey: number }> = ({ refreshKey }) =>
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white rounded-2xl border-2 border-slate-300 p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <History className="w-5 h-5 text-slate-700" />
-          <h2 className="text-lg font-extrabold text-slate-900">Stok Hareket Geçmişi</h2>
+          <History className="w-5 h-5 text-amber-600" />
+          <h2 className="text-lg font-extrabold text-slate-900">Stok &amp; Transfer Hareket Geçmişi</h2>
         </div>
 
-        <div className="flex items-center gap-2 flex-1 max-w-md">
+        <div className="flex items-center gap-2 flex-1 max-w-lg">
           <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-5 h-5 text-blue-600 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Referans, Level veya PKT kodu filtrele..."
-              className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm font-semibold outline-none"
+              placeholder="Referans, PKT Kodu, Level veya Transfer Yeri ara..."
+              className="w-full pl-10 pr-9 py-2.5 rounded-xl border-[3px] border-slate-800 bg-amber-50/20 hover:border-blue-700 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-200 text-sm font-extrabold text-slate-900 placeholder:text-slate-500 outline-none transition"
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded text-slate-500 hover:text-slate-900 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
           <button
             type="button"
             onClick={loadHistory}
-            className="p-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 cursor-pointer"
+            title="Yenile"
+            className="p-3 rounded-xl border-2 border-slate-400 hover:bg-slate-100 text-slate-700 cursor-pointer"
           >
             <RefreshCw className="w-4 h-4" />
           </button>

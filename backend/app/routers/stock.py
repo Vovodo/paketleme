@@ -11,7 +11,14 @@ from sqlalchemy import desc, func, or_, text
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
+from ..excel_security import (
+    ExcelSecurityError,
+    inspect_and_verify_xlsx_bytes,
+    sanitize_excel_cell_text,
+    sanitize_excel_filename,
+)
 from ..models import StockItem, StockMovement
+from .auth import require_safe_browser
 from ..qr_utils import (
     build_qr_payload,
     escape_like,
@@ -29,6 +36,7 @@ from ..schemas import (
     ScanDeductRequest,
     ScanIncreaseRequest,
     ScanRestoreRequest,
+    ScanTransferRequest,
     StockCreateRequest,
     StockDashboardSummary,
     StockDashboardViewOut,
@@ -47,9 +55,32 @@ from ..telegram_service import (
     send_telegram_message,
 )
 
-router = APIRouter(prefix="/api/stock", tags=["stock"])
+router = APIRouter(
+    prefix="/api/stock",
+    tags=["stock"],
+    dependencies=[Depends(require_safe_browser)],
+)
 
 TR_TZ = timezone(timedelta(hours=3))
+
+
+def _tr_upper(val: str) -> str:
+    return (
+        val.strip()
+        .replace("i", "İ")
+        .replace("ı", "I")
+        .replace("ğ", "Ğ")
+        .replace("ü", "Ü")
+        .replace("ş", "Ş")
+        .replace("ö", "Ö")
+        .replace("ç", "Ç")
+        .upper()
+    )
+
+
+def _is_warehouse_return_target(val: str) -> bool:
+    norm = normalize_code(val)
+    return norm in ("DEPO", "ANA DEPO", "DEPOYA", "DEPOYA IADE", "MERKEZ DEPO")
 
 
 def _safe_note(text_val: Optional[str]) -> Optional[str]:
@@ -140,8 +171,8 @@ def _build_level_filter_sql(
         return f"{expr} LIKE :{pfx_param} ESCAPE '\\'"
 
     if status_upper == "ACTIVE":
-        scope_sql = "sx.status IN ('IN_STOCK', 'REQUESTED') AND "
-    elif status_upper in ("IN_STOCK", "REQUESTED", "CONSUMED"):
+        scope_sql = "sx.status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED') AND "
+    elif status_upper in ("IN_STOCK", "REQUESTED", "TRANSFERRED", "CONSUMED"):
         params[f"{param_prefix}_st"] = status_upper
         scope_sql = f"sx.status = :{param_prefix}_st AND "
     else:
@@ -168,8 +199,8 @@ def _prepare_filter_clauses(
 
     status_upper = status.upper()
     if status_upper == "ACTIVE":
-        clauses.append("status IN ('IN_STOCK', 'REQUESTED')")
-    elif status_upper in ("IN_STOCK", "REQUESTED", "CONSUMED"):
+        clauses.append("status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED')")
+    elif status_upper in ("IN_STOCK", "REQUESTED", "TRANSFERRED", "CONSUMED"):
         clauses.append("status = :status_val")
         params["status_val"] = status_upper
 
@@ -195,6 +226,7 @@ def _prepare_filter_clauses(
             "label_code ILIKE :q_norm ESCAPE '\\'",
             "COALESCE(location_note, '') ILIKE :q_raw ESCAPE '\\'",
             "COALESCE(created_by, '') ILIKE :q_raw ESCAPE '\\'",
+            "COALESCE(transferred_to, '') ILIKE :q_raw ESCAPE '\\'",
         ]
         if q_lvl_k:
             # Önek eşleşmesi: 'P07' arandığında '1AD P07' gelmez, ama '1adp02' veya '1-aa' arandığında eşleşir
@@ -260,7 +292,8 @@ def _compute_dashboard_single_roundtrip(
             SELECT
                 id, label_code, qr_payload, reference, level,
                 initial_quantity, remaining_quantity, status,
-                location_note, created_by, requested_at, requested_note,
+                location_note, created_by, transferred_to, transferred_at,
+                requested_at, requested_note,
                 consumed_at, created_at, updated_at
             FROM stock_items
             WHERE {where_sql}
@@ -281,14 +314,18 @@ def _compute_dashboard_single_roundtrip(
     sql = text(
         f"""
         WITH active_items AS (
-            SELECT reference, level, remaining_quantity, status, created_at
+            SELECT reference, level, remaining_quantity, status, transferred_to, created_at
             FROM stock_items
-            WHERE status IN ('IN_STOCK', 'REQUESTED')
+            WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED')
         ),
         kpis AS (
             SELECT
                 COUNT(*)::int AS active_label_count,
                 COALESCE(SUM(remaining_quantity), 0)::int AS active_total_quantity,
+                COUNT(*) FILTER (WHERE status = 'IN_STOCK')::int AS in_stock_label_count,
+                COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'IN_STOCK'), 0)::int AS in_stock_total_quantity,
+                COUNT(*) FILTER (WHERE status = 'TRANSFERRED')::int AS transferred_label_count,
+                COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'TRANSFERRED'), 0)::int AS transferred_total_quantity,
                 COUNT(DISTINCT reference)::int AS distinct_reference_count,
                 COUNT(*) FILTER (WHERE status = 'REQUESTED')::int AS requested_label_count,
                 COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'REQUESTED'), 0)::int AS requested_total_quantity
@@ -310,6 +347,8 @@ def _compute_dashboard_single_roundtrip(
                 COUNT(*)::int AS label_count,
                 COUNT(*) FILTER (WHERE status = 'REQUESTED')::int AS requested_count,
                 COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'REQUESTED'), 0)::int AS requested_quantity,
+                COUNT(*) FILTER (WHERE status = 'TRANSFERRED')::int AS transferred_count,
+                COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'TRANSFERRED'), 0)::int AS transferred_quantity,
                 MIN(created_at) AS oldest_created_at
             FROM active_items
             WHERE 1=1 {group_filter_sql}
@@ -320,6 +359,10 @@ def _compute_dashboard_single_roundtrip(
         SELECT
             k.active_label_count,
             k.active_total_quantity,
+            k.in_stock_label_count,
+            k.in_stock_total_quantity,
+            k.transferred_label_count,
+            k.transferred_total_quantity,
             k.distinct_reference_count,
             k.requested_label_count,
             k.requested_total_quantity,
@@ -344,6 +387,8 @@ def _compute_dashboard_single_roundtrip(
             label_count=int(g["label_count"]),
             requested_count=int(g["requested_count"]),
             requested_quantity=int(g["requested_quantity"]),
+            transferred_count=int(g.get("transferred_count") or 0),
+            transferred_quantity=int(g.get("transferred_quantity") or 0),
             oldest_created_at=g["oldest_created_at"],
         )
         for g in raw_groups
@@ -352,6 +397,10 @@ def _compute_dashboard_single_roundtrip(
     summary = StockDashboardSummary(
         active_label_count=int(row["active_label_count"]),
         active_total_quantity=int(row["active_total_quantity"]),
+        in_stock_label_count=int(row["in_stock_label_count"]),
+        in_stock_total_quantity=int(row["in_stock_total_quantity"]),
+        transferred_label_count=int(row["transferred_label_count"]),
+        transferred_total_quantity=int(row["transferred_total_quantity"]),
         distinct_reference_count=int(row["distinct_reference_count"]),
         requested_label_count=int(row["requested_label_count"]),
         requested_total_quantity=int(row["requested_total_quantity"]),
@@ -542,7 +591,7 @@ def get_suggestions(db: Session = Depends(get_db)):
                             FROM (
                                 SELECT DISTINCT reference AS r
                                 FROM stock_items
-                                WHERE status IN ('IN_STOCK', 'REQUESTED')
+                                WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED')
                                   AND remaining_quantity > 0
                                 ORDER BY reference ASC
                                 LIMIT 500
@@ -556,7 +605,7 @@ def get_suggestions(db: Session = Depends(get_db)):
                             FROM (
                                 SELECT DISTINCT level AS l
                                 FROM stock_items
-                                WHERE status IN ('IN_STOCK', 'REQUESTED')
+                                WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED')
                                   AND remaining_quantity > 0
                                 ORDER BY level ASC
                                 LIMIT 200
@@ -599,7 +648,25 @@ def get_suggestions(db: Session = Depends(get_db)):
                             ) sub_op
                         ),
                         '[]'::json
-                    ) AS top_ops;
+                    ) AS top_ops,
+                    COALESCE(
+                        (
+                            SELECT json_agg(tr_display)
+                            FROM (
+                                SELECT
+                                    (ARRAY_AGG(BTRIM(transferred_to) ORDER BY transferred_at DESC NULLS LAST, updated_at DESC, id DESC))[1] AS tr_display,
+                                    COUNT(*) AS cnt,
+                                    MAX(COALESCE(transferred_at, updated_at)) AS last_used
+                                FROM stock_items
+                                WHERE transferred_to IS NOT NULL
+                                  AND BTRIM(transferred_to) <> ''
+                                GROUP BY UPPER(TRANSLATE(BTRIM(transferred_to), 'iıİIşŞğĞüÜöÖçÇ', 'IIIISSGGUUOOCC'))
+                                ORDER BY cnt DESC, last_used DESC
+                                LIMIT 8
+                            ) sub_tr
+                        ),
+                        '[]'::json
+                    ) AS top_trs;
                 """
             )
         )
@@ -611,14 +678,17 @@ def get_suggestions(db: Session = Depends(get_db)):
         levels=list(row["lvls"]),
         top_locations=list(row["top_locs"]),
         top_operators=list(row["top_ops"]),
+        top_transfer_targets=list(row["top_trs"]),
     )
 
 
 def _set_str_cell(ws, row_idx: int, col_idx: int, val: Optional[str]):
     cell = ws.cell(row=row_idx, column=col_idx)
-    text_val = "" if val is None else str(val)
-    cell.value = text_val
+    safe_text, needs_quote = sanitize_excel_cell_text(val)
+    cell.value = safe_text
     cell.data_type = "s"
+    if needs_quote:
+        cell.quotePrefix = True
     return cell
 
 
@@ -688,7 +758,7 @@ def export_stock_excel(
                     COALESCE(SUM(remaining_quantity) FILTER (WHERE status = 'REQUESTED'), 0)::int AS requested_quantity,
                     MIN(created_at) AS oldest_created_at
                 FROM stock_items
-                WHERE status IN ('IN_STOCK', 'REQUESTED'){grp_filter_sql}
+                WHERE status IN ('IN_STOCK', 'REQUESTED', 'TRANSFERRED'){grp_filter_sql}
                 GROUP BY reference, level
                 ORDER BY reference ASC, level ASC
                 """
@@ -700,6 +770,8 @@ def export_stock_excel(
     )
 
     wb = Workbook()
+    wb.calculation.calcMode = "manual"
+    wb.calculation.fullCalcOnLoad = False
 
     header_fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -712,11 +784,13 @@ def export_stock_excel(
     status_tr_map = {
         "IN_STOCK": "Depoda",
         "REQUESTED": "Talep Edildi",
+        "TRANSFERRED": "Transferde",
         "CONSUMED": "Kullanıldı (Arşiv)",
     }
     status_fill_map = {
         "IN_STOCK": PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid"),
         "REQUESTED": PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
+        "TRANSFERRED": PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
         "CONSUMED": PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid"),
     }
 
@@ -772,7 +846,12 @@ def export_stock_excel(
         c_init.number_format = "#,##0"
         c_init.alignment = Alignment(horizontal="right")
 
-        c_st = _set_str_cell(ws_items, idx, 6, status_tr_map.get(st_code, st_code))
+        st_label = (
+            f"Transfer: {r['transferred_to']}"
+            if st_code == "TRANSFERRED" and r.get("transferred_to")
+            else status_tr_map.get(st_code, st_code)
+        )
+        c_st = _set_str_cell(ws_items, idx, 6, st_label)
         c_st.font = bold_font
         c_st.alignment = Alignment(horizontal="center")
         if st_code in status_fill_map:
@@ -894,14 +973,30 @@ def export_stock_excel(
 
     buf = io.BytesIO()
     wb.save(buf)
-    filename = f"paketleme_stok_{now_tr.strftime('%Y-%m-%d_%H%M')}.xlsx"
+    xlsx_bytes = buf.getvalue()
+
+    try:
+        sha256_hex = inspect_and_verify_xlsx_bytes(xlsx_bytes)
+    except ExcelSecurityError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"İndirilecek Excel dosyası güvenlik taramasından geçemedi ve engellendi: {exc}",
+        ) from exc
+
+    filename = sanitize_excel_filename(f"paketleme_stok_{now_tr.strftime('%Y-%m-%d_%H%M')}.xlsx")
 
     return Response(
-        content=buf.getvalue(),
+        content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "X-Download-Options": "noopen",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "X-Content-SHA256": sha256_hex,
+            "X-Scan-Verdict": "CLEAN-OOXML",
         },
     )
 
@@ -913,7 +1008,7 @@ def match_production_references(
 ):
     active_items = (
         db.query(StockItem)
-        .filter(StockItem.status.in_(["IN_STOCK", "REQUESTED"]))
+        .filter(StockItem.status.in_(["IN_STOCK", "REQUESTED", "TRANSFERRED"]))
         .order_by(StockItem.created_at.asc(), StockItem.id.asc())
         .all()
     )
@@ -1048,7 +1143,7 @@ def scan_and_deduct_stock(
         action_name = "DEDUCTED"
         default_note = "QR okutularak tamamı stoktan düşüldü"
     else:
-        item.status = "IN_STOCK"
+        item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
         item.requested_at = None
         item.requested_note = None
         item.qr_payload = build_qr_payload(item.label_code, item.reference, item.level, qty_after)
@@ -1111,7 +1206,7 @@ def scan_and_increase_stock(
     if qty_after > item.initial_quantity:
         item.initial_quantity = qty_after
     if item.status == "CONSUMED":
-        item.status = "IN_STOCK"
+        item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
         item.consumed_at = None
     item.updated_at = now_utc
     item.qr_payload = build_qr_payload(item.label_code, item.reference, item.level, qty_after)
@@ -1151,7 +1246,7 @@ def _restore_consumed_item_in_tx(
     )
 
     item.remaining_quantity = restore_qty
-    item.status = "IN_STOCK"
+    item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
     item.consumed_at = None
     item.requested_at = None
     item.requested_note = None
@@ -1169,6 +1264,88 @@ def _restore_consumed_item_in_tx(
         )
     )
     return restore_qty
+
+
+@router.post("/scan-transfer", response_model=StockItemDetailOut)
+def scan_and_transfer_stock(
+    payload: ScanTransferRequest,
+    db: Session = Depends(get_db),
+):
+    raw = payload.qr_or_code.strip()
+    extracted = extract_label_code(raw)
+
+    item = (
+        db.query(StockItem)
+        .filter(
+            or_(
+                StockItem.qr_payload == raw,
+                StockItem.label_code == extracted,
+                StockItem.label_code == raw.upper(),
+            )
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if not item:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Okutulan kod ({raw}) sistemde bulunamadı.",
+        )
+
+    if item.status == "CONSUMED" or item.remaining_quantity <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{item.label_code} ({item.reference} / Level {item.level}) etiketi stoktan "
+                f"düşülmüş durumda (0 adet). Transfer etmek için önce stoğa geri alın."
+            ),
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    prev_place = (
+        item.transferred_to
+        if item.status == "TRANSFERRED" and item.transferred_to
+        else ("Depo (Talep Edilmiş)" if item.status == "REQUESTED" else "Depo")
+    )
+
+    if _is_warehouse_return_target(payload.target_location):
+        item.status = "IN_STOCK"
+        item.transferred_to = None
+        item.transferred_at = None
+        item.requested_at = None
+        item.requested_note = None
+        item.updated_at = now_utc
+        default_note = f"Depoya geri transfer edildi (Önceki yer: {prev_place})"
+    else:
+        clean_target = _tr_upper(payload.target_location)[:120]
+        item.status = "TRANSFERRED"
+        item.transferred_to = clean_target
+        item.transferred_at = now_utc
+        item.requested_at = None
+        item.requested_note = None
+        item.updated_at = now_utc
+        default_note = f"Transfer edildi: {prev_place} → {clean_target}"
+
+    mov_note = (
+        _safe_note(f"{default_note} ({payload.note.strip()})")
+        if payload.note and payload.note.strip()
+        else _safe_note(default_note)
+    )
+
+    db.add(
+        StockMovement(
+            stock_item_id=item.id,
+            action="TRANSFERRED",
+            quantity_change=0,
+            quantity_before=item.remaining_quantity,
+            quantity_after=item.remaining_quantity,
+            note=mov_note,
+        )
+    )
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.post("/scan-restore", response_model=StockItemDetailOut)
@@ -1421,7 +1598,7 @@ def cancel_warehouse_request(
     if item.status != "REQUESTED":
         raise HTTPException(status_code=400, detail="Bu etiket şu an talep durumunda değil.")
 
-    item.status = "IN_STOCK"
+    item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
     item.requested_at = None
     item.requested_note = None
     item.updated_at = datetime.now(timezone.utc)
@@ -1482,7 +1659,7 @@ def restore_consumed_item(item_id: int, db: Session = Depends(get_db)):
     )
 
     item.remaining_quantity = restore_qty
-    item.status = "IN_STOCK"
+    item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
     item.consumed_at = None
     item.requested_at = None
     item.requested_note = None
@@ -1543,7 +1720,7 @@ def update_stock_item(
         if item.remaining_quantity > item.initial_quantity:
             item.initial_quantity = item.remaining_quantity
         if item.status == "CONSUMED" and item.remaining_quantity > 0:
-            item.status = "IN_STOCK"
+            item.status = "TRANSFERRED" if item.transferred_to else "IN_STOCK"
             item.consumed_at = None
 
     if payload.location_note is not None:
@@ -1592,12 +1769,15 @@ def list_movements(
 
     if q and q.strip():
         raw_term = q.strip()
+        escaped_raw = escape_like(raw_term)
         escaped_norm = escape_like(normalize_code(raw_term))
         mov_lvl_k = level_key(raw_term)
         extracted = extract_label_code(raw_term)
         conds = [
             StockItem.reference.ilike(f"%{escaped_norm}%", escape="\\"),
             StockItem.label_code.ilike(f"%{escaped_norm}%", escape="\\"),
+            StockItem.transferred_to.ilike(f"%{escaped_raw}%", escape="\\"),
+            StockMovement.note.ilike(f"%{escaped_raw}%", escape="\\"),
         ]
         if mov_lvl_k:
             conds.append(

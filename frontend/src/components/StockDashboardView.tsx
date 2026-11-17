@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRightLeft,
+  BellRing,
   Boxes,
   CheckCircle2,
   ChevronDown,
@@ -9,26 +11,36 @@ import {
   FileSpreadsheet,
   Layers,
   ListChecks,
+  MapPin,
   PackageSearch,
   Printer,
   Search,
   Send,
   Undo2,
+  Warehouse,
   X,
 } from 'lucide-react';
 import { api } from '../api';
 import { resolveCanonicalLevelClient } from '../levelUtils';
+import { getRowStatusClasses, StockStatusBadge } from '../statusStyles';
 import {
   ProductionMatchResult,
   StockDashboardSummary,
   StockItem,
 } from '../types';
 
+const QUICK_MODAL_TARGETS = [
+  'PAKETLEME HAT-1',
+  'PAKETLEME HAT-2',
+  'ÜRETİM BANDI',
+  'KALİTE KONTROL',
+];
+
 interface StockDashboardViewProps {
   refreshKey: number;
   onPrintItem: (item: StockItem) => void;
   onDataChanged: () => void;
-  onActiveCountChange?: (count: number) => void;
+  onActiveCountChange?: (count: number, transferredCount?: number) => void;
 }
 
 function formatAgeDays(isoDate: string): string {
@@ -50,7 +62,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
   const [search, setSearch] = useState('');
   const [levelFilter, setLevelFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<
-    'ACTIVE' | 'IN_STOCK' | 'REQUESTED' | 'CONSUMED'
+    'ACTIVE' | 'IN_STOCK' | 'TRANSFERRED' | 'REQUESTED' | 'CONSUMED'
   >('ACTIVE');
   const [sortBy, setSortBy] = useState<'newest' | 'fifo' | 'qty_desc' | 'ref_asc'>('fifo');
 
@@ -67,6 +79,11 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
   const [requestingItem, setRequestingItem] = useState<StockItem | null>(null);
   const [requestNote, setRequestNote] = useState('');
   const [sendingRequest, setSendingRequest] = useState(false);
+
+  const [transferringItem, setTransferringItem] = useState<StockItem | null>(null);
+  const [transferTarget, setTransferTarget] = useState('');
+  const [transferNote, setTransferNote] = useState('');
+  const [sendingTransfer, setSendingTransfer] = useState(false);
 
   const [editingItem, setEditingItem] = useState<StockItem | null>(null);
   const [editRef, setEditRef] = useState('');
@@ -100,24 +117,29 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
     if (exportingExcel) return;
     setExportingExcel(true);
     try {
-      if (mode === 'active') {
-        await api.exportStockExcel({ status: 'ACTIVE', sort: sortBy });
-      } else if (mode === 'all') {
-        await api.exportStockExcel({ status: 'ALL', sort: 'newest' });
-      } else {
-        await api.exportStockExcel({
-          q: search || undefined,
-          level: levelFilter || undefined,
-          status: statusFilter,
-          sort: sortBy,
-        });
-      }
+      const verified =
+        mode === 'active'
+          ? await api.exportStockExcel({ status: 'ACTIVE', sort: sortBy })
+          : mode === 'all'
+          ? await api.exportStockExcel({ status: 'ALL', sort: 'newest' })
+          : await api.exportStockExcel({
+              q: search || undefined,
+              level: levelFilter || undefined,
+              status: statusFilter,
+              sort: sortBy,
+            });
       setToastBanner({
         kind: 'success',
-        message: 'Stok tablosu Excel (.xlsx) dosyası olarak indirildi.',
+        message: `Güvenlik taramasından geçti (${verified.inspectedFiles} iç bileşen temiz • SHA-256: ${verified.sha256.slice(
+          0,
+          12
+        )}…) — ${verified.safeFilename} indirildi.`,
       });
     } catch (err: any) {
-      alert(err.message || 'Excel dosyası oluşturulamadı.');
+      setToastBanner({
+        kind: 'warn',
+        message: err.message || 'Excel dosyası güvenlik kontrolünden geçemedi ve engellendi.',
+      });
     } finally {
       setExportingExcel(false);
     }
@@ -159,7 +181,10 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
       if (mySeq !== reqSeqRef.current) return;
       setSummary(data.summary);
       setItems(data.items);
-      onActiveCountChange?.(data.summary.active_label_count);
+      onActiveCountChange?.(
+        data.summary.active_label_count,
+        data.summary.transferred_label_count
+      );
     } catch (err) {
       if (mySeq === reqSeqRef.current) {
         console.error(err);
@@ -201,6 +226,9 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
       if (statusFilter === 'IN_STOCK' && updatedItem.status !== 'IN_STOCK') {
         return prev.filter((x) => x.id !== updatedItem.id);
       }
+      if (statusFilter === 'TRANSFERRED' && updatedItem.status !== 'TRANSFERRED') {
+        return prev.filter((x) => x.id !== updatedItem.id);
+      }
       if (statusFilter === 'REQUESTED' && updatedItem.status !== 'REQUESTED') {
         return prev.filter((x) => x.id !== updatedItem.id);
       }
@@ -209,6 +237,35 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
       }
       return prev.map((x) => (x.id === updatedItem.id ? updatedItem : x));
     });
+  };
+
+  const handleConfirmTransferModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferringItem || !transferTarget.trim()) return;
+    setSendingTransfer(true);
+    try {
+      const updated = await api.scanTransfer({
+        qr_or_code: transferringItem.label_code,
+        target_location: transferTarget.trim(),
+        note: transferNote.trim() || undefined,
+      });
+      applyItemPatchInMemory(updated);
+      setToastBanner({
+        kind: 'success',
+        message:
+          updated.status === 'IN_STOCK'
+            ? `${updated.label_code} (${updated.reference}) tekrar Depoya alındı.`
+            : `${updated.label_code} (${updated.reference}) → ${updated.transferred_to} konumuna transfer edildi.`,
+      });
+      setTransferringItem(null);
+      setTransferTarget('');
+      setTransferNote('');
+      onDataChanged();
+    } catch (err: any) {
+      alert(err.message || 'Transfer yapılamadı.');
+    } finally {
+      setSendingTransfer(false);
+    }
   };
 
   const handleConfirmRequest = async (e: React.FormEvent) => {
@@ -378,56 +435,132 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
         </div>
       )}
 
-      {/* KPI Kartları */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
-            Depodaki Etiket Sayısı
+      {/* RENK KODLU DURUM KARTLARI (Tıklayarak Hızlı Filtreleme) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('ACTIVE');
+            setSubTab('labels');
+          }}
+          className={`text-left rounded-2xl border-2 p-4 shadow-xs transition cursor-pointer ${
+            statusFilter === 'ACTIVE' && subTab === 'labels'
+              ? 'border-blue-600 bg-blue-50/60 ring-2 ring-blue-200'
+              : 'border-slate-300 bg-white hover:border-blue-400'
+          }`}
+        >
+          <div className="text-[11px] font-extrabold uppercase tracking-wider text-blue-700">
+            Tüm Aktif Stoklar
           </div>
-          <div className="text-3xl font-black text-slate-900 mt-1">
-            {summary ? summary.active_label_count : '-'}
+          <div className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">
+            {summary ? summary.active_total_quantity : '-'}{' '}
+            <span className="text-xs font-bold text-slate-500">Adet</span>
           </div>
-          <div className="text-xs text-slate-500 mt-1">
-            {summary ? `${summary.distinct_reference_count} farklı referans` : '...'}
+          <div className="text-xs font-semibold text-slate-500 mt-1">
+            {summary
+              ? `${summary.active_label_count} etiket • ${summary.distinct_reference_count} referans`
+              : '...'}
           </div>
-        </div>
+        </button>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-500">
-            Toplam Paketsiz Kılıf
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('IN_STOCK');
+            setSubTab('labels');
+          }}
+          className={`text-left rounded-2xl border-2 p-4 shadow-xs transition cursor-pointer ${
+            statusFilter === 'IN_STOCK' && subTab === 'labels'
+              ? 'border-emerald-600 bg-emerald-100/70 ring-2 ring-emerald-200'
+              : 'border-emerald-300 bg-emerald-50/50 hover:border-emerald-500'
+          }`}
+        >
+          <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+            <Warehouse className="w-3.5 h-3.5 text-emerald-700" />
+            Depoda Bekleyen
           </div>
-          <div className="text-3xl font-black text-blue-600 mt-1">
-            {summary ? `${summary.active_total_quantity}` : '-'}{' '}
-            <span className="text-sm font-bold text-slate-500">Adet</span>
+          <div className="text-2xl sm:text-3xl font-black text-emerald-800 mt-1">
+            {summary ? summary.in_stock_label_count : '-'}{' '}
+            <span className="text-xs font-bold text-emerald-700">Etiket</span>
           </div>
-          <div className="text-xs text-slate-500 mt-1">Depoda mevcut toplam stok</div>
-        </div>
+          <div className="text-xs font-semibold text-emerald-800/80 mt-1">
+            {summary ? `${summary.in_stock_total_quantity} adet depoda` : '...'}
+          </div>
+        </button>
 
-        <div className="bg-white rounded-2xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-amber-700">
-            Talep Durumundakiler
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('TRANSFERRED');
+            setSubTab('labels');
+          }}
+          className={`text-left rounded-2xl border-2 p-4 shadow-xs transition cursor-pointer ${
+            statusFilter === 'TRANSFERRED' && subTab === 'labels'
+              ? 'border-violet-600 bg-violet-100/70 ring-2 ring-violet-200'
+              : 'border-violet-300 bg-violet-50/50 hover:border-violet-500'
+          }`}
+        >
+          <div className="text-[11px] font-extrabold uppercase tracking-wider text-violet-900 flex items-center gap-1.5">
+            <MapPin className="w-3.5 h-3.5 text-violet-700" />
+            Transfer Edilenler
           </div>
-          <div className="text-3xl font-black text-amber-600 mt-1">
+          <div className="text-2xl sm:text-3xl font-black text-violet-700 mt-1">
+            {summary ? summary.transferred_label_count : '-'}{' '}
+            <span className="text-xs font-bold text-violet-800">Etiket</span>
+          </div>
+          <div className="text-xs font-semibold text-violet-800/80 mt-1">
+            {summary ? `${summary.transferred_total_quantity} adet hatlarda/bölümde` : '...'}
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('REQUESTED');
+            setSubTab('labels');
+          }}
+          className={`text-left rounded-2xl border-2 p-4 shadow-xs transition cursor-pointer ${
+            statusFilter === 'REQUESTED' && subTab === 'labels'
+              ? 'border-amber-600 bg-amber-100/70 ring-2 ring-amber-200'
+              : 'border-amber-300 bg-amber-50/50 hover:border-amber-500'
+          }`}
+        >
+          <div className="text-[11px] font-extrabold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+            <BellRing className="w-3.5 h-3.5 text-amber-700" />
+            Talep Durumunda
+          </div>
+          <div className="text-2xl sm:text-3xl font-black text-amber-700 mt-1">
             {summary ? summary.requested_label_count : '-'}{' '}
-            <span className="text-sm font-bold text-amber-700">Etiket</span>
+            <span className="text-xs font-bold text-amber-800">Etiket</span>
           </div>
-          <div className="text-xs text-amber-700/80 mt-1">
-            {summary ? `Toplam ${summary.requested_total_quantity} adet talep edildi` : '...'}
+          <div className="text-xs font-semibold text-amber-800/80 mt-1">
+            {summary ? `${summary.requested_total_quantity} adet talep edildi` : '...'}
           </div>
-        </div>
+        </button>
 
-        <div className="bg-white rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">
-            Bugün Pakete Alınan
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('CONSUMED');
+            setSubTab('labels');
+          }}
+          className={`col-span-2 md:col-span-1 text-left rounded-2xl border-2 p-4 shadow-xs transition cursor-pointer ${
+            statusFilter === 'CONSUMED' && subTab === 'labels'
+              ? 'border-rose-600 bg-rose-100/70 ring-2 ring-rose-200'
+              : 'border-rose-300 bg-rose-50/40 hover:border-rose-500'
+          }`}
+        >
+          <div className="text-[11px] font-extrabold uppercase tracking-wider text-rose-800">
+            Bugün Stoktan Düşülen
           </div>
-          <div className="text-3xl font-black text-emerald-600 mt-1">
+          <div className="text-2xl sm:text-3xl font-black text-rose-700 mt-1">
             {summary ? summary.consumed_today_quantity : '-'}{' '}
-            <span className="text-sm font-bold text-emerald-700">Adet</span>
+            <span className="text-xs font-bold text-rose-800">Adet</span>
           </div>
-          <div className="text-xs text-emerald-700/80 mt-1">
-            {summary ? `${summary.consumed_today_count} işlem ile stoktan düşüldü` : '...'}
+          <div className="text-xs font-semibold text-rose-800/80 mt-1">
+            {summary ? `${summary.consumed_today_count} işlem (Arşivi gör)` : '...'}
           </div>
-        </div>
+        </button>
       </div>
 
       {/* Alt Sekme Seçici */}
@@ -654,6 +787,11 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                               <span className="text-sm font-black text-emerald-700">
                                 {it.remaining_quantity} Adet
                               </span>
+                              <StockStatusBadge
+                                status={it.status}
+                                transferredTo={it.transferred_to}
+                                size="sm"
+                              />
                               {it.created_by && (
                                 <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-bold">
                                   {it.created_by}
@@ -667,11 +805,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                             </div>
 
                             <div className="flex items-center gap-2">
-                              {it.status === 'REQUESTED' ? (
-                                <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-800 text-xs font-extrabold">
-                                  Talep Edildi
-                                </span>
-                              ) : (
+                              {it.status === 'IN_STOCK' && (
                                 <button
                                   type="button"
                                   onClick={() => handleQuickRequestDirect(it)}
@@ -732,66 +866,101 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
         </div>
       )}
 
-      {/* ARAMA & FİLTRE ÇUBUĞU */}
+      {/* YÜKSEK GÖRÜNÜRLÜKLÜ ARAMA & FİLTRE ÇUBUĞU */}
       {subTab !== 'matcher' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Referans, Etiket No (PKT-...), Personel/Hat veya Not ara..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 focus:border-blue-600 text-sm font-semibold outline-none"
-            />
+        <div className="bg-white rounded-2xl border-2 border-slate-400 p-4 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[260px]">
+              <label className="block text-xs font-black uppercase tracking-wider text-slate-900 mb-1.5">
+                Referans / Etiket No / Bulunduğu Yer Ara
+              </label>
+              <div className="relative">
+                <Search className="w-5 h-5 text-blue-700 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Referans, PKT-100001, Transfer Yeri veya Personel yazın..."
+                  className="w-full pl-11 pr-10 py-3 rounded-xl border-[3px] border-slate-800 bg-blue-50/25 hover:border-blue-700 focus:bg-white focus:border-blue-600 focus:ring-4 focus:ring-blue-200 text-sm sm:text-base font-extrabold text-slate-900 placeholder:text-slate-500 placeholder:font-semibold outline-none shadow-xs transition"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    title="Aramayı temizle"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-slate-200 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {subTab === 'labels' && (
+              <>
+                <div className="w-36 sm:w-44">
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-900 mb-1.5">
+                    Level Filtresi
+                  </label>
+                  <input
+                    type="text"
+                    value={levelFilter}
+                    onChange={(e) => setLevelFilter(e.target.value.toUpperCase())}
+                    placeholder="Örn: 1AA, P07"
+                    className="w-full px-3.5 py-3 rounded-xl border-[3px] border-slate-700 bg-white hover:border-blue-700 focus:border-blue-600 focus:ring-4 focus:ring-blue-200 text-sm sm:text-base font-extrabold uppercase text-slate-900 placeholder:text-slate-500 outline-none shadow-xs transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-900 mb-1.5">
+                    Ürün Durumu / Yeri
+                  </label>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="px-3.5 py-3 rounded-xl border-2 border-slate-700 bg-white hover:border-blue-700 focus:border-blue-600 text-sm font-extrabold text-slate-900 outline-none cursor-pointer"
+                  >
+                    <option value="ACTIVE">Tüm Aktifler (Depo + Transfer + Talep)</option>
+                    <option value="IN_STOCK">🟢 Sadece Depoda Bekleyenler</option>
+                    <option value="TRANSFERRED">🟣 Transfer Edilenler (Hatlarda)</option>
+                    <option value="REQUESTED">🟠 Depodan Talep Edilenler</option>
+                    <option value="CONSUMED">🔴 Stoktan Düşülenler (Bitenler)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                    Sıralama
+                  </label>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="px-3.5 py-3 rounded-xl border-2 border-slate-400 bg-white hover:border-slate-600 focus:border-blue-600 text-sm font-extrabold text-slate-800 outline-none cursor-pointer"
+                  >
+                    <option value="fifo">FIFO (En Eski Önce)</option>
+                    <option value="newest">En Yeni Eklenen</option>
+                    <option value="qty_desc">Miktar (Çoktan Aza)</option>
+                    <option value="ref_asc">Referans (A-Z)</option>
+                  </select>
+                </div>
+              </>
+            )}
+
+            {(search || levelFilter || statusFilter !== 'ACTIVE') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setLevelFilter('');
+                  setStatusFilter('ACTIVE');
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-3 rounded-xl border-2 border-rose-300 bg-rose-50 hover:bg-rose-100 text-xs font-extrabold text-rose-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+                Filtreyi Sıfırla
+              </button>
+            )}
           </div>
-
-          {subTab === 'labels' && (
-            <>
-              <input
-                type="text"
-                value={levelFilter}
-                onChange={(e) => setLevelFilter(e.target.value.toUpperCase())}
-                placeholder="Level Filtrele..."
-                className="w-36 px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-600 text-sm font-semibold uppercase outline-none"
-              />
-
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-sm font-bold text-slate-700 outline-none"
-              >
-                <option value="ACTIVE">Aktif Stoklar (Depoda + Talep)</option>
-                <option value="IN_STOCK">Sadece Depoda Bekleyen</option>
-                <option value="REQUESTED">Talep Edilenler</option>
-                <option value="CONSUMED">Stoktan Düşülenler (Arşiv)</option>
-              </select>
-
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-sm font-bold text-slate-700 outline-none"
-              >
-                <option value="fifo">FIFO (En Eski Önce)</option>
-                <option value="newest">En Yeni Eklenen</option>
-                <option value="qty_desc">Miktar (Çoktan Aza)</option>
-                <option value="ref_asc">Referans (A-Z)</option>
-              </select>
-            </>
-          )}
-
-          {(search || levelFilter) && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearch('');
-                setLevelFilter('');
-              }}
-              className="px-3 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
-            >
-              Filtreyi Temizle
-            </button>
-          )}
         </div>
       )}
 
@@ -838,6 +1007,11 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                         {grp.requested_count > 0 && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
                             {grp.requested_count} Talepde
+                          </span>
+                        )}
+                        {grp.transferred_count > 0 && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 text-xs font-bold">
+                            {grp.transferred_count} Transferde
                           </span>
                         )}
                       </td>
@@ -892,13 +1066,16 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                     <th className="py-3.5 px-4">Personel / Hat</th>
                     <th className="py-3.5 px-4">Konum / Not</th>
                     <th className="py-3.5 px-4">Depo Süresi</th>
-                    <th className="py-3.5 px-4">Durum</th>
+                    <th className="py-3.5 px-4">Durum / Bulunduğu Yer</th>
                     <th className="py-3.5 px-4 text-right">İşlemler</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
+                <tbody className="divide-y divide-slate-200 text-sm">
                   {items.map((it) => (
-                    <tr key={it.id} className="hover:bg-slate-50/80 transition">
+                    <tr
+                      key={it.id}
+                      className={`transition ${getRowStatusClasses(it.status, it.transferred_to)}`}
+                    >
                       <td className="py-3.5 px-4 font-mono-code font-bold text-xs text-slate-700">
                         {it.label_code}
                       </td>
@@ -953,21 +1130,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                         </div>
                       </td>
                       <td className="py-3.5 px-4">
-                        {it.status === 'IN_STOCK' && (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-extrabold">
-                            Depoda
-                          </span>
-                        )}
-                        {it.status === 'REQUESTED' && (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-extrabold">
-                            Talep Edildi
-                          </span>
-                        )}
-                        {it.status === 'CONSUMED' && (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-slate-200 text-slate-600 text-xs font-bold">
-                            Kullanıldı
-                          </span>
-                        )}
+                        <StockStatusBadge status={it.status} transferredTo={it.transferred_to} />
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="inline-flex items-center justify-end gap-1.5">
@@ -999,9 +1162,22 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                             <>
                               <button
                                 type="button"
+                                onClick={() => {
+                                  setTransferringItem(it);
+                                  setTransferTarget(it.transferred_to || '');
+                                  setTransferNote('');
+                                }}
+                                title="Başka Bölüme / Hatta Transfer Et"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition cursor-pointer"
+                              >
+                                <ArrowRightLeft className="w-3.5 h-3.5" />
+                                Transfer
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => onPrintItem(it)}
                                 title="Etiketi Tekrar Yazdır"
-                                className="p-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 transition cursor-pointer"
+                                className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 transition cursor-pointer"
                               >
                                 <Printer className="w-4 h-4" />
                               </button>
@@ -1009,7 +1185,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                                 type="button"
                                 onClick={() => openEditModal(it)}
                                 title="Düzenle"
-                                className="p-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 transition cursor-pointer"
+                                className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 transition cursor-pointer"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
@@ -1200,6 +1376,124 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                   className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-extrabold cursor-pointer"
                 >
                   Kaydet
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Hızlı Konum / Hat Transfer Modalı */}
+      {transferringItem && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border-2 border-violet-300">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-violet-600" />
+                Ürünü Transfer Et
+              </h3>
+              <button
+                type="button"
+                onClick={() => setTransferringItem(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 mb-4 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-mono-code font-bold text-slate-500">
+                  {transferringItem.label_code}
+                </div>
+                <div className="text-xl font-black text-slate-900">
+                  {transferringItem.reference}
+                </div>
+                <div className="text-xs font-bold text-slate-700 mt-0.5">
+                  Level: {transferringItem.level} • {transferringItem.remaining_quantity} Adet
+                </div>
+              </div>
+              <StockStatusBadge
+                status={transferringItem.status}
+                transferredTo={transferringItem.transferred_to}
+                size="sm"
+              />
+            </div>
+
+            <form onSubmit={handleConfirmTransferModal} className="space-y-4">
+              <div>
+                <label className="block text-xs font-black uppercase text-slate-700 mb-1.5">
+                  Nereye Transfer Edilecek?
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={transferTarget}
+                  onChange={(e) => setTransferTarget(e.target.value.toLocaleUpperCase('tr-TR'))}
+                  placeholder="Örn: PAKETLEME HAT-1"
+                  className="w-full rounded-xl border-2 border-slate-500 focus:border-violet-600 focus:ring-4 focus:ring-violet-100 px-3.5 py-3 text-base font-black uppercase outline-none"
+                />
+
+                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  {QUICK_MODAL_TARGETS.map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTransferTarget(t)}
+                      className={`px-2.5 py-1.5 rounded-lg border text-xs font-extrabold cursor-pointer ${
+                        transferTarget.trim() === t
+                          ? 'border-violet-600 bg-violet-600 text-white'
+                          : 'border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-900'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  {transferringItem.status === 'TRANSFERRED' && (
+                    <button
+                      type="button"
+                      onClick={() => setTransferTarget('DEPO')}
+                      className={`px-2.5 py-1.5 rounded-lg border text-xs font-extrabold cursor-pointer ${
+                        transferTarget.trim() === 'DEPO'
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : 'border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900'
+                      }`}
+                    >
+                      DEPOYA GERİ AL
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Açıklama (İsteğe Bağlı)
+                </label>
+                <input
+                  type="text"
+                  value={transferNote}
+                  onChange={(e) => setTransferNote(e.target.value)}
+                  placeholder="Örn: Hat sorumlusuna teslim edildi"
+                  className="w-full rounded-xl border-2 border-slate-300 focus:border-violet-600 px-3.5 py-2.5 text-sm font-semibold outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTransferringItem(null)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-sm font-bold text-slate-700 cursor-pointer"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  type="submit"
+                  disabled={sendingTransfer || !transferTarget.trim()}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:bg-violet-300 text-white text-sm font-extrabold cursor-pointer"
+                >
+                  <ArrowRightLeft className="w-4 h-4" />
+                  {sendingTransfer ? 'Aktarılıyor...' : 'Transferi Kaydet'}
                 </button>
               </div>
             </form>

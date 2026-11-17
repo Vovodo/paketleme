@@ -26,6 +26,7 @@ import {
   setScanSoundEnabled,
   unlockScanAudio,
 } from '../sound';
+import { StockStatusBadge } from '../statusStyles';
 import { StockItem, StockItemDetail } from '../types';
 
 type ScanMode = 'confirm' | 'instant' | 'restore_only';
@@ -596,10 +597,10 @@ export const ScanDeductView: React.FC<ScanDeductViewProps> = ({
             }
             className={`flex-1 rounded-xl border-2 px-4 py-4 text-lg font-mono-code font-bold text-slate-900 outline-none ${
               scanMode === 'restore_only'
-                ? 'border-indigo-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100'
+                ? 'border-indigo-500 focus:border-indigo-700 focus:ring-4 focus:ring-indigo-100'
                 : scanMode === 'instant'
-                ? 'border-amber-300 focus:border-amber-500 focus:ring-4 focus:ring-amber-100'
-                : 'border-slate-300 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-100'
+                ? 'border-amber-500 focus:border-amber-600 focus:ring-4 focus:ring-amber-100'
+                : 'border-slate-500 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-100'
             }`}
           />
 
@@ -668,13 +669,18 @@ export const ScanDeductView: React.FC<ScanDeductViewProps> = ({
           }`}
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <span className="font-mono-code text-sm font-black bg-slate-900 text-white px-3 py-1 rounded-lg">
                 {foundItem.label_code}
               </span>
+              <StockStatusBadge
+                status={foundItem.status}
+                transferredTo={foundItem.transferred_to}
+                size="sm"
+              />
               {foundItem.status === 'CONSUMED' ? (
                 <span className="px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-extrabold">
-                  STOKTAN DÜŞÜLMÜŞ — STOĞA GERİ ALINABİLİR
+                  STOĞA GERİ ALINABİLİR
                 </span>
               ) : (
                 <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-extrabold">

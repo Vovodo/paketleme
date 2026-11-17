@@ -104,6 +104,27 @@ class ScanIncreaseRequest(BaseModel):
         return v.strip()
 
 
+class ScanTransferRequest(BaseModel):
+    qr_or_code: str = Field(..., min_length=1, max_length=512, description="QR Kod içeriği veya Etiket Kodu")
+    target_location: str = Field(..., min_length=1, max_length=120, description="Transfer edilecek yer / hat / bölüm")
+    note: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("qr_or_code")
+    @classmethod
+    def qr_transfer_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Okutulan kod boş olamaz.")
+        return v.strip()
+
+    @field_validator("target_location")
+    @classmethod
+    def target_not_blank(cls, v: str) -> str:
+        cleaned = " ".join((v or "").strip().split())
+        if not cleaned:
+            raise ValueError("Transfer edilecek yer boş bırakılamaz.")
+        return cleaned
+
+
 class ProductionMatchItem(BaseModel):
     reference: str = Field(..., min_length=1, max_length=120)
     level: Optional[str] = Field(default=None, max_length=80)
@@ -143,6 +164,8 @@ class StockItemOut(BaseModel):
     status: str
     location_note: Optional[str] = None
     created_by: Optional[str] = None
+    transferred_to: Optional[str] = None
+    transferred_at: Optional[datetime] = None
     requested_at: Optional[datetime] = None
     requested_note: Optional[str] = None
     consumed_at: Optional[datetime] = None
@@ -175,12 +198,18 @@ class ReferenceLevelGroupOut(BaseModel):
     label_count: int
     requested_count: int
     requested_quantity: int
+    transferred_count: int = 0
+    transferred_quantity: int = 0
     oldest_created_at: datetime
 
 
 class StockDashboardSummary(BaseModel):
     active_label_count: int
     active_total_quantity: int
+    in_stock_label_count: int = 0
+    in_stock_total_quantity: int = 0
+    transferred_label_count: int = 0
+    transferred_total_quantity: int = 0
     distinct_reference_count: int
     requested_label_count: int
     requested_total_quantity: int
@@ -208,6 +237,7 @@ class SuggestionsOut(BaseModel):
     levels: list[str]
     top_locations: list[str] = []
     top_operators: list[str] = []
+    top_transfer_targets: list[str] = []
 
 
 class AdminAuthRequest(BaseModel):

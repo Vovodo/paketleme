@@ -525,7 +525,7 @@ def get_dashboard_combined(
     reference: Optional[str] = Query(default=None),
     level: Optional[str] = Query(default=None),
     status: str = Query(default="ACTIVE"),
-    sort: str = Query(default="fifo"),
+    sort: str = Query(default="newest"),
     limit: int = Query(default=300, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):

@@ -64,7 +64,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<
     'ACTIVE' | 'IN_STOCK' | 'TRANSFERRED' | 'REQUESTED' | 'CONSUMED'
   >('ACTIVE');
-  const [sortBy, setSortBy] = useState<'newest' | 'fifo' | 'qty_desc' | 'ref_asc'>('fifo');
+  const [sortBy, setSortBy] = useState<'newest' | 'fifo' | 'qty_desc' | 'ref_asc'>('newest');
 
   const [summary, setSummary] = useState<StockDashboardSummary | null>(null);
   const [items, setItems] = useState<StockItem[]>([]);
@@ -929,16 +929,16 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-900 mb-1.5">
                     Sıralama
                   </label>
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as any)}
-                    className="px-3.5 py-3 rounded-xl border-2 border-slate-400 bg-white hover:border-slate-600 focus:border-blue-600 text-sm font-extrabold text-slate-800 outline-none cursor-pointer"
+                    className="px-3.5 py-3 rounded-xl border-2 border-slate-700 bg-white hover:border-blue-700 focus:border-blue-600 text-sm font-extrabold text-slate-900 outline-none cursor-pointer"
                   >
-                    <option value="fifo">FIFO (En Eski Önce)</option>
                     <option value="newest">En Yeni Eklenen</option>
+                    <option value="fifo">FIFO (En Eski Önce)</option>
                     <option value="qty_desc">Miktar (Çoktan Aza)</option>
                     <option value="ref_asc">Referans (A-Z)</option>
                   </select>
@@ -990,11 +990,11 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                       key={`${grp.reference}__${grp.level}`}
                       className="hover:bg-slate-50/80 transition"
                     >
-                      <td className="py-3.5 px-4 font-black text-base text-slate-900">
+                      <td className="py-3.5 px-4 font-black text-base text-slate-900 whitespace-nowrap">
                         {grp.reference}
                       </td>
-                      <td className="py-3.5 px-4">
-                        <span className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 font-extrabold text-xs border border-blue-200">
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 font-extrabold text-xs border border-blue-200">
                           {grp.level}
                         </span>
                       </td>
@@ -1058,16 +1058,16 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-xs font-extrabold uppercase tracking-wider text-slate-500">
-                    <th className="py-3.5 px-4">Etiket Kodu</th>
-                    <th className="py-3.5 px-4">Referans</th>
-                    <th className="py-3.5 px-4">Level</th>
-                    <th className="py-3.5 px-4 text-right">Miktar</th>
-                    <th className="py-3.5 px-4">Personel / Hat</th>
-                    <th className="py-3.5 px-4">Konum / Not</th>
-                    <th className="py-3.5 px-4">Depo Süresi</th>
-                    <th className="py-3.5 px-4">Durum / Bulunduğu Yer</th>
-                    <th className="py-3.5 px-4 text-right">İşlemler</th>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
+                    <th className="py-3 px-3 whitespace-nowrap">Etiket Kodu</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Referans</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Level</th>
+                    <th className="py-3 px-3 text-right whitespace-nowrap">Miktar</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Personel / Hat</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Konum / Not</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Depo Süresi</th>
+                    <th className="py-3 px-3 whitespace-nowrap">Durum / Bulunduğu Yer</th>
+                    <th className="py-3 px-3 text-right whitespace-nowrap">İşlemler</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-sm">
@@ -1076,18 +1076,18 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                       key={it.id}
                       className={`transition ${getRowStatusClasses(it.status, it.transferred_to)}`}
                     >
-                      <td className="py-3.5 px-4 font-mono-code font-bold text-xs text-slate-700">
+                      <td className="py-3 px-3 whitespace-nowrap font-mono-code font-extrabold text-xs text-slate-800">
                         {it.label_code}
                       </td>
-                      <td className="py-3.5 px-4 font-black text-base text-slate-900">
+                      <td className="py-3 px-3 whitespace-nowrap font-black text-base text-slate-900">
                         {it.reference}
                       </td>
-                      <td className="py-3.5 px-4">
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-extrabold text-xs">
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200/80 text-slate-800 font-extrabold text-xs">
                           {it.level}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 text-right">
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
                         <span className="font-black text-lg text-slate-900">
                           {it.remaining_quantity}
                         </span>
@@ -1097,29 +1097,29 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                           </span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-xs font-bold text-slate-700 max-w-[150px] truncate">
+                      <td className="py-3 px-3 text-xs font-bold text-slate-700 max-w-[130px] truncate">
                         {it.created_by ? (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs">
+                          <span className="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs max-w-full truncate">
                             {it.created_by}
                           </span>
                         ) : (
                           <span className="text-slate-400 font-normal">-</span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-xs text-slate-600 max-w-[180px] truncate">
+                      <td className="py-3 px-3 text-xs text-slate-600 max-w-[150px] truncate">
                         {it.location_note || '-'}
                         {it.requested_note && (
-                          <div className="text-amber-700 font-bold mt-0.5">
+                          <div className="text-amber-700 font-bold mt-0.5 truncate">
                             Talep: {it.requested_note}
                           </div>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-xs text-slate-500">
-                        <div className="inline-flex items-center gap-1 font-semibold text-slate-700">
-                          <Clock className="w-3.5 h-3.5 text-slate-400" />
-                          {formatAgeDays(it.created_at)}
+                      <td className="py-3 px-3 text-xs text-slate-500 whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1 font-semibold text-slate-700 whitespace-nowrap">
+                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>{formatAgeDays(it.created_at)}</span>
                         </div>
-                        <div className="text-[11px] text-slate-400">
+                        <div className="text-[11px] text-slate-400 whitespace-nowrap">
                           {new Date(it.created_at).toLocaleString('tr-TR', {
                             day: '2-digit',
                             month: '2-digit',
@@ -1129,32 +1129,34 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                           })}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4">
+                      <td className="py-3 px-3 whitespace-nowrap">
                         <StockStatusBadge status={it.status} transferredTo={it.transferred_to} />
                       </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="inline-flex items-center justify-end gap-1.5">
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
                           {it.status === 'IN_STOCK' && (
                             <button
                               type="button"
+                              title="Depodan Talep Et (Telegram Bildirimi Gönder)"
                               onClick={() => {
                                 setRequestingItem(it);
                                 setRequestNote('');
                               }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition cursor-pointer"
+                              className="w-[86px] h-8 inline-flex items-center justify-center gap-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold whitespace-nowrap shrink-0 shadow-2xs transition cursor-pointer"
                             >
-                              <Send className="w-3.5 h-3.5" />
-                              Talep Et
+                              <Send className="w-3.5 h-3.5 shrink-0" />
+                              <span>Talep Et</span>
                             </button>
                           )}
 
                           {it.status === 'REQUESTED' && (
                             <button
                               type="button"
+                              title="Depo Talebini İptal Et"
                               onClick={() => handleCancelRequest(it)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition cursor-pointer"
+                              className="w-[86px] h-8 inline-flex items-center justify-center gap-1 rounded-lg border border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-extrabold whitespace-nowrap shrink-0 transition cursor-pointer"
                             >
-                              Talebi İptal
+                              <span>İptal Et</span>
                             </button>
                           )}
 
@@ -1168,16 +1170,16 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                                   setTransferNote('');
                                 }}
                                 title="Başka Bölüme / Hatta Transfer Et"
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition cursor-pointer"
+                                className="w-[86px] h-8 inline-flex items-center justify-center gap-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-extrabold whitespace-nowrap shrink-0 shadow-2xs transition cursor-pointer"
                               >
-                                <ArrowRightLeft className="w-3.5 h-3.5" />
-                                Transfer
+                                <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+                                <span>Transfer</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => onPrintItem(it)}
                                 title="Etiketi Tekrar Yazdır"
-                                className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 transition cursor-pointer"
+                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shrink-0 transition cursor-pointer"
                               >
                                 <Printer className="w-4 h-4" />
                               </button>
@@ -1185,7 +1187,7 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                                 type="button"
                                 onClick={() => openEditModal(it)}
                                 title="Düzenle"
-                                className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 transition cursor-pointer"
+                                className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shrink-0 transition cursor-pointer"
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
@@ -1196,10 +1198,10 @@ export const StockDashboardView: React.FC<StockDashboardViewProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRestore(it)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer"
+                              className="h-8 inline-flex items-center justify-center gap-1 px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-extrabold whitespace-nowrap shrink-0 cursor-pointer"
                             >
-                              <Undo2 className="w-3.5 h-3.5" />
-                              Stoğa Geri Al
+                              <Undo2 className="w-3.5 h-3.5 shrink-0" />
+                              <span>Stoğa Geri Al</span>
                             </button>
                           )}
                         </div>

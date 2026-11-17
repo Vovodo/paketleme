@@ -763,13 +763,13 @@ export const TransferView: React.FC<TransferViewProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-100 border-b-2 border-slate-200 text-xs font-black uppercase tracking-wider text-slate-600">
-                  <th className="py-3.5 px-4">Bulunduğu Yer (Durum)</th>
-                  <th className="py-3.5 px-4">Etiket No</th>
-                  <th className="py-3.5 px-4">Referans</th>
-                  <th className="py-3.5 px-4">Level</th>
-                  <th className="py-3.5 px-4 text-right">Miktar</th>
-                  <th className="py-3.5 px-4">Transfer Zamanı</th>
-                  <th className="py-3.5 px-4 text-right">Hızlı İşlem</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">Bulunduğu Yer (Durum)</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">Etiket No</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">Referans</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">Level</th>
+                  <th className="py-3.5 px-4 text-right whitespace-nowrap">Miktar</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">Transfer Zamanı</th>
+                  <th className="py-3.5 px-4 text-right whitespace-nowrap">Hızlı İşlem</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 text-sm">
@@ -778,25 +778,25 @@ export const TransferView: React.FC<TransferViewProps> = ({
                     key={it.id}
                     className={`transition ${getRowStatusClasses(it.status, it.transferred_to)}`}
                   >
-                    <td className="py-3.5 px-4">
+                    <td className="py-3.5 px-4 whitespace-nowrap">
                       <StockStatusBadge status={it.status} transferredTo={it.transferred_to} />
                     </td>
-                    <td className="py-3.5 px-4 font-mono-code font-bold text-xs text-slate-800">
+                    <td className="py-3.5 px-4 whitespace-nowrap font-mono-code font-bold text-xs text-slate-800">
                       {it.label_code}
                     </td>
-                    <td className="py-3.5 px-4 font-black text-base text-slate-900">
+                    <td className="py-3.5 px-4 whitespace-nowrap font-black text-base text-slate-900">
                       {it.reference}
                     </td>
-                    <td className="py-3.5 px-4">
-                      <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-800 font-extrabold text-xs">
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <span className="inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-800 font-extrabold text-xs">
                         {it.level}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-right font-black text-lg text-slate-900">
+                    <td className="py-3.5 px-4 text-right whitespace-nowrap font-black text-lg text-slate-900">
                       {it.remaining_quantity}{' '}
                       <span className="text-xs font-bold text-slate-500">Adet</span>
                     </td>
-                    <td className="py-3.5 px-4 text-xs font-semibold text-slate-600">
+                    <td className="py-3.5 px-4 whitespace-nowrap text-xs font-semibold text-slate-600">
                       {it.transferred_at
                         ? new Date(it.transferred_at).toLocaleString('tr-TR', {
                             day: '2-digit',
